@@ -1,0 +1,5 @@
+{
+    "api_key_LANGCHAIN_mistral": "YOUR_API_KEY_HERE",
+    "model_LANGCHAIN_mistral": "mistral-small-latest",
+    "llm_backend": 2
+}

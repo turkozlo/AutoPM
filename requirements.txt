@@ -1,0 +1,8 @@
+pandas
+pm4py
+numpy
+matplotlib
+langchain-mistralai
+langchain-core
+python-dotenv
+scipy

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Configuration
+config.json
+
+# Reports and Data
+reports/
+*.csv
+!morning_routine_structured.csv # Keep the example data if desired, or ignore all
+
+# IDEs
+.idea/
+.vscode/
+.antigravity/
+.gemini/
