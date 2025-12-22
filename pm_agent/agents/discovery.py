@@ -45,9 +45,9 @@ class ProcessDiscoveryAgent:
                         return dv
             return None
 
-        case_id = get_col(['case_id', 'caseid', 'case'], pm_columns)
-        activity_key = get_col(['activity', 'event', 'operation'], pm_columns)
-        timestamp_key = get_col(['timestamp', 'time', 'date'], pm_columns)
+        case_id = get_col(['case_id', 'caseid', 'case', 'case:concept:name'], pm_columns)
+        activity_key = get_col(['activity', 'event', 'operation', 'concept:name'], pm_columns)
+        timestamp_key = get_col(['timestamp', 'time', 'date', 'time:timestamp'], pm_columns)
         
         # Validation and Fallback
         if not activity_key or activity_key not in self.df.columns:
@@ -75,6 +75,16 @@ class ProcessDiscoveryAgent:
             'activity': activity_key,
             'timestamp': timestamp_key
         }
+
+        # 1.2 Ensure Timestamp is Datetime (CRITICAL for pm4py)
+        if timestamp_key in self.df.columns:
+            try:
+                self.df[timestamp_key] = pd.to_datetime(self.df[timestamp_key], errors='coerce')
+                # Drop rows where timestamp couldn't be parsed
+                if self.df[timestamp_key].isna().any():
+                    self.df = self.df.dropna(subset=[timestamp_key])
+            except Exception as e:
+                return json.dumps({"error": f"Failed to convert timestamp column '{timestamp_key}' to datetime: {e}"}, ensure_ascii=False)
         
         # 1.5 Synthetic Case ID if needed
         if not case_id or self.df[case_id].nunique() > len(self.df) * 0.9:
@@ -86,12 +96,19 @@ class ProcessDiscoveryAgent:
         
         # 2. Format DataFrame
         try:
+            if self.df.empty:
+                return json.dumps({"error": "DataFrame is empty after processing. Cannot perform discovery."}, ensure_ascii=False)
+                
             formatted_df = pm4py.format_dataframe(
                 self.df,
                 case_id=case_id,
                 activity_key=activity_key,
                 timestamp_key=timestamp_key
             )
+            
+            if formatted_df.empty:
+                return json.dumps({"error": "pm4py.format_dataframe returned an empty result. Check your column mappings and data types."}, ensure_ascii=False)
+                
         except Exception as e:
              return json.dumps({"error": f"pm4py formatting failed: {e}"}, ensure_ascii=False)
 

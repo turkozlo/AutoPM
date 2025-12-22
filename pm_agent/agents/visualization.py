@@ -13,6 +13,7 @@ class VisualizationAgent:
         """
         Generates mandatory PM charts and asks LLM to interpret them.
         """
+        self.df = self.df.copy() # Isolate to prevent side effects
         # 1. Identify Columns for PM Charts
         pm_readiness = profiling_report.get('process_mining_readiness', {})
         
