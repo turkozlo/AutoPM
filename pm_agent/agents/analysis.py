@@ -26,6 +26,19 @@ class ProcessAnalysisAgent:
         Analyzes process performance and returns strict analysis_result.json.
         """
         self.df = self.df.copy() # Isolate
+        
+        # 0. Deduplicate column names (common issue with dirty CSVs)
+        if self.df.columns.duplicated().any():
+            new_cols = []
+            counts = {}
+            for col in self.df.columns:
+                if col in counts:
+                    counts[col] += 1
+                    new_cols.append(f"{col}_{counts[col]}")
+                else:
+                    counts[col] = 0
+                    new_cols.append(col)
+            self.df.columns = new_cols
         # Normalize keys and handle variations
         def get_col(keys, d):
             for k in keys:
@@ -33,7 +46,8 @@ class ProcessAnalysisAgent:
                     dk_norm = dk.lower().replace(" ", "").replace("_", "").replace(":", "")
                     k_norm = k.lower().replace(" ", "").replace("_", "").replace(":", "")
                     if dk_norm == k_norm:
-                        return dv
+                        # Ensure we return a single string if dv is a list
+                        return dv[0] if isinstance(dv, list) else str(dv)
             return None
 
         case_col = get_col(['case_id', 'caseid', 'case', 'case:concept:name'], pm_columns)
@@ -62,12 +76,20 @@ class ProcessAnalysisAgent:
         # 1.2 Ensure Timestamp is Datetime (CRITICAL for pm4py)
         if timestamp_col in self.df.columns:
             try:
-                self.df[timestamp_col] = pd.to_datetime(self.df[timestamp_col], errors='coerce')
+                # Handle duplicate column names (self.df[col] returns a DataFrame)
+                ts_data = self.df[timestamp_col]
+                if isinstance(ts_data, pd.DataFrame):
+                    ts_data = ts_data.iloc[:, 0]
+                
+                if not pd.api.types.is_datetime64_any_dtype(ts_data):
+                    self.df[timestamp_col] = pd.to_datetime(ts_data, errors='coerce')
+                
                 # Drop rows where timestamp couldn't be parsed
-                if self.df[timestamp_col].isna().any():
+                if self.df[timestamp_col].isna().any().any() if isinstance(self.df[timestamp_col], pd.DataFrame) else self.df[timestamp_col].isna().any():
                     self.df = self.df.dropna(subset=[timestamp_col])
             except Exception as e:
-                return json.dumps({"error": f"Failed to convert timestamp column '{timestamp_col}' to datetime: {e}"}, ensure_ascii=False)
+                col_type = str(type(self.df[timestamp_col]))
+                return json.dumps({"error": f"Failed to convert timestamp column '{timestamp_col}' (Type: {col_type}) to datetime: {e}"}, ensure_ascii=False)
 
         # 1. Synthetic Case ID if needed
         use_synthetic = False
