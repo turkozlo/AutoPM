@@ -125,7 +125,7 @@ class ProcessAnalysisAgent:
             timestamp_col_std = 'time:timestamp'
 
             duration_stats = {}
-            if case_durations_sec:
+            if case_durations_sec is not None and len(case_durations_sec) > 0:
                 median_sec = np.median(case_durations_sec)
                 val_mean, unit_mean = self.get_best_unit(np.mean(case_durations_sec))
                 val_median, unit_median = self.get_best_unit(np.median(case_durations_sec))
@@ -157,7 +157,7 @@ class ProcessAnalysisAgent:
 
             # Anomalies (Long cases)
             anomalies = []
-            if case_durations_sec:
+            if case_durations_sec is not None and len(case_durations_sec) > 0:
                 threshold = np.percentile(case_durations_sec, 99)
                 case_groups = formatted_df.groupby(case_col_std)[timestamp_col_std]
                 case_durs = (case_groups.max() - case_groups.min()).dt.total_seconds()
