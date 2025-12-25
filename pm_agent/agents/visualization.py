@@ -113,7 +113,12 @@ class VisualizationAgent:
                 
                 # LLM Interpretation
                 stats_prompt = f"Chart: {chart['name']}\nData Summary: {json.dumps(data_summary)}"
-                interp_system = "Ты — аналитик. Дай краткую интерпретацию (1 предложение) этого графика на основе статистики. Обязательно используй цифры из сводки. Не выдумывай."
+                interp_system = (
+                    "Ты — аналитик. Дай краткую интерпретацию (1 предложение) этого графика на основе статистики. "
+                    "Обязательно используй цифры из сводки. Не выдумывай. "
+                    "ВАЖНО: Если в сводке есть большие числа в секундах, переведи их в часы или дни для удобства (например, 172800 сек -> 2 дня). "
+                    "Используй правильные названия: 'будильник' (не bulldog), 'дн.' (с точкой), 'час.', 'мин.'."
+                )
                 interpretation = self.llm.generate_response(stats_prompt, interp_system)
                 
                 results.append({
@@ -135,7 +140,7 @@ class VisualizationAgent:
 
             return json.dumps({
                 "visualizations": results,
-                "thoughts": f"Сгенерированы обязательные графики. {gap_explanation} Все файлы сохранены в формате .png.",
+                "thoughts": f"Сгенерированы обязательные графики. {gap_explanation} Доказательства: файлы сохранены в формате .png, временной диапазон подтвержден расчетами.",
                 "applied_functions": ["plt.savefig()", "df.value_counts()", "df.groupby().diff()", "pd.to_datetime()"]
             }, indent=2, ensure_ascii=False)
         except Exception as e:

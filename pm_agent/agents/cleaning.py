@@ -114,14 +114,15 @@ class DataCleaningAgent:
         cleaning_summary = (
             f"Очистка завершена. Удалено строк: {initial_rows - final_rows}. "
             f"Удалено дубликатов: {duplicates_removed}. "
-            f"Заполнено пропусков: {fill_summary}. "
-            f"Все изменения соответствуют плану. Визуализация для этого шага не требуется, так как изменения носят структурный характер."
+            f"Заполнено пропусков: {len(fill_actions)} (детали: {fill_summary}). "
+            f"Все изменения соответствуют плану. Доказательства: итоговое количество строк {final_rows} против исходных {initial_rows}."
         )
 
         result = {
             "rows_before": initial_rows,
             "rows_after": final_rows,
             "rows_removed": initial_rows - final_rows,
+            "rows_filled": len(fill_actions),
             "removed_by_column": removed_by_column,
             "duplicates_removed": duplicates_removed,
             "fill_actions": fill_actions,

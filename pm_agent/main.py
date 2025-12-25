@@ -114,12 +114,12 @@ def main():
     artifacts = {}
 
     # 2. Data Profiling
-    profiling_agent = DataProfilingAgent(df)
+    profiling_agent = DataProfilingAgent(df.copy())
     profile_json = run_step_with_retry("Data Profiling", profiling_agent.run, llm)
     artifacts['profiling'] = json.loads(profile_json)
 
     # 3. Data Cleaning
-    cleaning_agent = DataCleaningAgent(df, llm)
+    cleaning_agent = DataCleaningAgent(df.copy(), llm)
     clean_res = run_step_with_retry("Data Cleaning", cleaning_agent.run, llm, profiling_report=artifacts['profiling'])
     
     # Handle tuple return (report, cleaned_df)
@@ -131,7 +131,7 @@ def main():
     artifacts['cleaning'] = json.loads(clean_report_json)
     
     # 4. Visualization
-    vis_agent = VisualizationAgent(df, llm)
+    vis_agent = VisualizationAgent(df.copy(), llm)
     vis_report_json = run_step_with_retry("Visualization", vis_agent.run, llm, profiling_report=artifacts['profiling'], output_dir=output_dir)
     try:
         artifacts['visualization'] = json.loads(vis_report_json)
@@ -139,14 +139,14 @@ def main():
         artifacts['visualization'] = {"error": "Failed to parse visualization JSON", "raw": vis_report_json}
 
     # 5. Process Discovery
-    discovery_agent = ProcessDiscoveryAgent(df, llm)
+    discovery_agent = ProcessDiscoveryAgent(df.copy(), llm)
     
     # Pass output_dir
     discovery_json = run_step_with_retry("Process Discovery", discovery_agent.run, llm, pm_columns=None, output_dir=output_dir)
     artifacts['discovery'] = json.loads(discovery_json)
 
     # 6. Process Analysis
-    analysis_agent = ProcessAnalysisAgent(df, llm)
+    analysis_agent = ProcessAnalysisAgent(df.copy(), llm)
     
     confirmed_pm_cols = artifacts['discovery'].get('pm_columns')
     if not confirmed_pm_cols:

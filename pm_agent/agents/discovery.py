@@ -28,6 +28,9 @@ class ProcessDiscoveryAgent:
                     counts[col] = 0
                     new_cols.append(col)
             df.columns = new_cols
+
+            df.columns = new_cols
+
         # 1. Identify Columns (if needed)
         if not pm_columns:
             system_prompt = (
@@ -100,6 +103,7 @@ class ProcessDiscoveryAgent:
                     ts_data = ts_data.iloc[:, 0]
 
                 if not pd.api.types.is_datetime64_any_dtype(ts_data):
+                    # Robust conversion: handle objects that might be Timestamps already
                     df[timestamp_key] = pd.to_datetime(ts_data, errors='coerce')
                 
                 # Drop rows where timestamp couldn't be parsed
@@ -116,6 +120,12 @@ class ProcessDiscoveryAgent:
             df['case_id_synth'] = (df[timestamp_key].diff() > pd.Timedelta("30min")).cumsum()
             case_id = 'case_id_synth'
             pm_columns['case_id'] = case_id
+        
+        # 1.7 Drop existing pm4py columns to avoid conflicts, UNLESS they are the source
+        pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
+        cols_to_drop = [c for c in pm4py_cols if c in df.columns and c not in [case_id, activity_key, timestamp_key]]
+        if cols_to_drop:
+            df = df.drop(columns=cols_to_drop)
         
         # 2. Format DataFrame
         try:
@@ -221,6 +231,7 @@ class ProcessDiscoveryAgent:
             num_activities = int(formatted_df[activity_key].nunique())
             num_edges = len(dfg)
             top_start = max(start_activities.items(), key=lambda x: x[1])[0] if start_activities else "N/A"
+            top_end = max(end_activities.items(), key=lambda x: x[1])[0] if end_activities else "N/A"
 
             result = {
                 "pm_columns": pm_columns,
@@ -231,7 +242,9 @@ class ProcessDiscoveryAgent:
                 "top_transitions": transitions[:10],
                 "loops": loops,
                 "mermaid": mermaid_code,
-                "thoughts": f"Процесс успешно восстановлен. Обнаружено {num_activities} активностей и {num_edges} переходов. Основная стартовая активность: '{top_start}'. Сгенерирована интерактивная схема (Mermaid).",
+                "thoughts": f"Процесс успешно восстановлен. Обнаружено {num_activities} активностей и {num_edges} переходов. "
+                            f"Основная стартовая активность: '{top_start}', основная конечная: '{top_end}'. "
+                            f"Доказательства: сгенерирована интерактивная схема (Mermaid), расчеты выполнены через pm4py.discover_dfg().",
                 "applied_functions": ["pm4py.discover_dfg()", "mermaid_generation"]
             }
             

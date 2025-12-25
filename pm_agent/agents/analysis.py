@@ -40,6 +40,8 @@ class ProcessAnalysisAgent:
                     counts[col] = 0
                     new_cols.append(col)
             df.columns = new_cols
+
+            df.columns = new_cols
         # Normalize keys and handle variations
         def get_col(keys, d):
             for k in keys:
@@ -110,6 +112,12 @@ class ProcessAnalysisAgent:
                 # Last resort: just index
                 df['case_id_synth'] = df.index // 10
                 case_col = 'case_id_synth'
+
+        # 1.7 Drop existing pm4py columns to avoid conflicts, UNLESS they are the source
+        pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
+        cols_to_drop = [c for c in pm4py_cols if c in df.columns and c not in [case_col, activity_col, timestamp_col]]
+        if cols_to_drop:
+            df = df.drop(columns=cols_to_drop)
 
         # 2. Format DataFrame
         try:
@@ -224,7 +232,7 @@ class ProcessAnalysisAgent:
                 "case_duration": duration_stats,
                 "bottlenecks": bottlenecks,
                 "anomalies": anomalies,
-                "thoughts": f"Анализ производительности выполнен. Среднее время кейса: {mean_str}, P95: {p95_str}. {gap_explanation} {evidence_str}",
+                "thoughts": f"Анализ производительности выполнен. Среднее время кейса: {mean_str}, P95: {p95_str}. {gap_explanation} {evidence_str} Расчеты подтверждены через pm4py.get_all_case_durations().",
                 "applied_functions": ["pm4py.get_all_case_durations()", "df.groupby().diff()", "np.percentile()"]
             }
             

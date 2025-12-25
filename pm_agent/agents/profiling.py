@@ -68,19 +68,46 @@ class DataProfilingAgent:
 
             col_stats[col] = stats
 
-        # PM Readiness Candidates
+        # PM Readiness Candidates and Justification
         case_candidates = []
         activity_candidates = []
         timestamp_candidates = []
+        justifications = {}
         
         for col, s in col_stats.items():
             lcol = col.lower()
             if 'id' in lcol or 'case' in lcol or 'number' in lcol:
                 case_candidates.append(col)
+                justifications[col] = f"Выбран как кандидат на Case ID, так как имя содержит '{lcol}' и имеет {s['unique']} уникальных значений."
             if 'activity' in lcol or 'status' in lcol or 'event' in lcol or 'operation' in lcol:
                 activity_candidates.append(col)
+                justifications[col] = justifications.get(col, "") + f" Выбран как кандидат на Activity, так как имя содержит '{lcol}'."
             if 'date' in lcol or 'time' in lcol or 'timestamp' in lcol:
                 timestamp_candidates.append(col)
+                justifications[col] = justifications.get(col, "") + f" Выбран как кандидат на Timestamp, так как имя содержит '{lcol}' и тип данных {s['dtype']}."
+
+        # Calculate readiness score (simplified logic)
+        readiness_score = 100
+        reasons = []
+        if not case_candidates:
+            readiness_score -= 40
+            reasons.append("Не найдены явные кандидаты на Case ID.")
+        if not activity_candidates:
+            readiness_score -= 30
+            reasons.append("Не найдены явные кандидаты на Activity.")
+        if not timestamp_candidates:
+            readiness_score -= 30
+            reasons.append("Не найдены явные кандидаты на Timestamp.")
+        
+        # Deduct for NaNs in critical columns
+        for col in (case_candidates + activity_candidates + timestamp_candidates):
+            if col in col_stats and col_stats[col]['nan'] > 0:
+                penalty = min(10, col_stats[col]['nan_percent'])
+                readiness_score -= penalty
+                reasons.append(f"В колонке '{col}' есть пропуски ({col_stats[col]['nan_percent']}%).")
+
+        readiness_score = max(0, round(readiness_score, 2))
+        readiness_level = "Высокая" if readiness_score > 80 else "Средняя" if readiness_score > 50 else "Низкая"
 
         profile = {
             "row_count": total_rows,
@@ -88,11 +115,17 @@ class DataProfilingAgent:
             "columns": col_stats,
             "duplicates": int(self.df.duplicated().sum()),
             "process_mining_readiness": {
+                "score": readiness_score,
+                "level": readiness_level,
+                "reasons": reasons,
                 "case_id_candidates": case_candidates,
                 "activity_candidates": activity_candidates,
-                "timestamp_candidates": timestamp_candidates
+                "timestamp_candidates": timestamp_candidates,
+                "justifications": justifications
             },
-            "thoughts": "Данные проанализированы. Сформирован детальный профиль с распределением значений и оценкой готовности к Process Mining.",
+            "thoughts": f"Данные проанализированы. Оценка готовности к Process Mining: {readiness_level} ({readiness_score}%). "
+                        f"Основные причины: {'; '.join(reasons) if reasons else 'критических проблем не обнаружено'}. "
+                        f"Выбраны кандидаты для Case ID, Activity и Timestamp с обоснованием.",
             "applied_functions": ["df.shape", "df.dtypes", "df.isna().sum()", "df.nunique()", "df.duplicated().sum()", "df.value_counts()"]
         }
 
