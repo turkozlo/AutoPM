@@ -59,10 +59,17 @@ def run_step_with_retry(step_name: str, agent_func, llm: LLMClient, max_retries:
             if isinstance(res_data, dict):
                 thoughts = res_data.get("thoughts")
                 funcs = res_data.get("applied_functions")
+                err = res_data.get("error")
+                debug = res_data.get("debug_info")
+                
                 if thoughts:
                     print(f"\n💡 МЫСЛИ АГЕНТА: {thoughts}")
                 if funcs:
                     print(f"🛠️ ПРИМЕНЕННЫЕ ФУНКЦИИ: {', '.join(funcs)}")
+                if err:
+                    print(f"\n❌ ОШИБКА АГЕНТА: {err}")
+                if debug:
+                    print(f"🔍 DEBUG INFO: {json.dumps(debug, indent=2, ensure_ascii=False)}")
         except:
             pass
 
