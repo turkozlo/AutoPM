@@ -14,6 +14,7 @@ class ProcessDiscoveryAgent:
         Discovers process model and returns strict discovery_result.json.
         """
         self.df = self.df.copy() # Isolate
+        self.df_orig = self.df.copy() # For debugging
         
         # 0. Deduplicate column names
         if self.df.columns.duplicated().any():
@@ -119,7 +120,20 @@ class ProcessDiscoveryAgent:
         # 2. Format DataFrame
         try:
             if self.df.empty:
-                return json.dumps({"error": "DataFrame is empty after processing. Cannot perform discovery."}, ensure_ascii=False)
+                cols_info = {c: str(self.df_orig[c].dtype) if c in self.df_orig.columns else "N/A" for c in [case_id, activity_key, timestamp_key]}
+                return json.dumps({
+                    "error": "DataFrame is empty after processing. Cannot perform discovery.",
+                    "debug_info": {
+                        "initial_rows": len(self.df_orig),
+                        "identified_columns": {
+                            "case": case_id,
+                            "activity": activity_key,
+                            "timestamp": timestamp_key
+                        },
+                        "column_types": cols_info,
+                        "available_columns": list(self.df_orig.columns)
+                    }
+                }, ensure_ascii=False)
                 
             formatted_df = pm4py.format_dataframe(
                 self.df,
