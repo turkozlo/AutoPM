@@ -12,7 +12,7 @@ class DataCleaningAgent:
         Analyzes profiling report, asks LLM for cleaning plan, executes it, 
         and returns strict cleaning_result.json.
         """
-        self.df = self.df.copy() # Isolate
+        df = self.df.copy() # Isolate
         # 1. Ask LLM for plan based on Profile
         system_prompt = (
             "Ты — Data Cleaning Agent. Твоя задача — создать ПЛАН очистки данных на основе профиля данных (JSON). "
@@ -58,48 +58,48 @@ class DataCleaningAgent:
             pass
 
         # 3. Execute Plan (Python Fact)
-        initial_rows = len(self.df)
+        initial_rows = len(df)
         removed_by_column = {}
         fill_actions = []
         
         # Handle Duplicates
         duplicates_removed = 0
         if duplicates > 0:
-            before_dup = len(self.df)
-            self.df.drop_duplicates(inplace=True)
-            duplicates_removed = before_dup - len(self.df)
+            before_dup = len(df)
+            df.drop_duplicates(inplace=True)
+            duplicates_removed = before_dup - len(df)
 
         for action in actions:
             col = action.get("column")
             act = action.get("action")
             reason = action.get("reason", "Standard cleaning")
             
-            if col not in self.df.columns:
+            if col not in df.columns:
                 continue
                 
-            nan_before = int(self.df[col].isna().sum())
+            nan_before = int(df[col].isna().sum())
             if nan_before == 0 and act != "drop_row":
                 continue
 
             if act == "drop_row":
-                before_drop = len(self.df)
-                self.df.dropna(subset=[col], inplace=True)
-                removed_count = before_drop - len(self.df)
+                before_drop = len(df)
+                df.dropna(subset=[col], inplace=True)
+                removed_count = before_drop - len(df)
                 removed_by_column[col] = removed_by_column.get(col, 0) + removed_count
             elif act in ["fill_mean", "fill_median", "fill_mode", "fill_empty"]:
                 val = None
-                if act == "fill_mean" and pd.api.types.is_numeric_dtype(self.df[col]):
-                    val = self.df[col].mean()
-                elif act == "fill_median" and pd.api.types.is_numeric_dtype(self.df[col]):
-                    val = self.df[col].median()
+                if act == "fill_mean" and pd.api.types.is_numeric_dtype(df[col]):
+                    val = df[col].mean()
+                elif act == "fill_median" and pd.api.types.is_numeric_dtype(df[col]):
+                    val = df[col].median()
                 elif act == "fill_mode":
-                    if not self.df[col].mode().empty:
-                        val = self.df[col].mode()[0]
+                    if not df[col].mode().empty:
+                        val = df[col].mode()[0]
                 elif act == "fill_empty":
                     val = "Unknown"
                 
                 if val is not None:
-                    self.df[col] = self.df[col].fillna(val)
+                    df[col] = df[col].fillna(val)
                     fill_actions.append({
                         "column": col,
                         "action": act,
@@ -107,7 +107,7 @@ class DataCleaningAgent:
                         "reason": reason
                     })
 
-        final_rows = len(self.df)
+        final_rows = len(df)
         
         # Prepare verbose thoughts for the Judge
         fill_summary = ", ".join([f"{a['column']}: {a['action']} ({a['value']})" for a in fill_actions]) if fill_actions else "нет"
@@ -129,5 +129,5 @@ class DataCleaningAgent:
             "applied_functions": ["df.drop_duplicates()", "df.dropna()", "df.fillna()", "df.mean()", "df.mode()"]
         }
         
-        return json.dumps(result, indent=2, ensure_ascii=False), self.df
+        return json.dumps(result, indent=2, ensure_ascii=False), df
 

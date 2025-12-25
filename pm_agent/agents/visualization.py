@@ -13,7 +13,7 @@ class VisualizationAgent:
         """
         Generates mandatory PM charts and asks LLM to interpret them.
         """
-        self.df = self.df.copy() # Isolate to prevent side effects
+        df = self.df.copy() # Isolate to prevent side effects
         # 1. Identify Columns for PM Charts
         pm_readiness = profiling_report.get('process_mining_readiness', {})
         
@@ -23,20 +23,20 @@ class VisualizationAgent:
         case_col = pm_readiness.get('case_id_candidates', [None])[0]
         
         # Fallback to first column if not found
-        if not activity_col: activity_col = list(self.df.columns)[0]
+        if not activity_col: activity_col = list(df.columns)[0]
         if not timestamp_col: 
             # Look for any datetime column
             for col, stats in profiling_report['columns'].items():
                 if 'datetime' in stats['dtype']:
                     timestamp_col = col
                     break
-        if not case_col: case_col = list(self.df.columns)[0]
+        if not case_col: case_col = list(df.columns)[0]
 
         # 1.5 Synthetic Case ID if needed
-        if not case_col or case_col not in self.df.columns or self.df[case_col].nunique() > len(self.df) * 0.9:
-            self.df = self.df.sort_values(timestamp_col)
-            self.df[timestamp_col] = pd.to_datetime(self.df[timestamp_col], errors='coerce')
-            self.df['case_id_synth'] = (self.df[timestamp_col].diff() > pd.Timedelta("30min")).cumsum()
+        if not case_col or case_col not in df.columns or df[case_col].nunique() > len(df) * 0.9:
+            df = df.sort_values(timestamp_col)
+            df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+            df['case_id_synth'] = (df[timestamp_col].diff() > pd.Timedelta("30min")).cumsum()
             case_col = 'case_id_synth'
 
         charts = [
@@ -62,22 +62,22 @@ class VisualizationAgent:
                 data_summary = {}
                 
                 if ctype == "bar":
-                    counts = self.df[col].value_counts().head(10)
+                    counts = df[col].value_counts().head(10)
                     counts.plot(kind='bar')
                     data_summary = {str(k): int(v) for k, v in counts.items()}
                 elif ctype == "hist":
                     # Ensure timestamp is datetime
-                    temp_ts = pd.to_datetime(self.df[col], errors='coerce').dropna()
+                    temp_ts = pd.to_datetime(df[col], errors='coerce').dropna()
                     if not temp_ts.empty:
                         temp_ts.hist(bins=20)
                         data_summary = {"min": str(temp_ts.min()), "max": str(temp_ts.max())}
                 elif ctype == "case_events":
-                    counts = self.df.groupby(case_col).size()
+                    counts = df.groupby(case_col).size()
                     counts.hist(bins=20)
                     data_summary = {"mean": float(counts.mean()), "max": int(counts.max()), "min": int(counts.min())}
                 elif ctype == "inter_event":
                     # Sort and calculate diff
-                    temp_df = self.df[[case_col, timestamp_col]].copy()
+                    temp_df = df[[case_col, timestamp_col]].copy()
                     temp_df[timestamp_col] = pd.to_datetime(temp_df[timestamp_col], errors='coerce')
                     temp_df = temp_df.sort_values([case_col, timestamp_col])
                     diffs_sec = temp_df.groupby(case_col)[timestamp_col].diff().dt.total_seconds().dropna()
@@ -129,7 +129,7 @@ class VisualizationAgent:
 
         try:
             # Explanation for large gaps
-            ts_series = pd.to_datetime(self.df[timestamp_col], errors='coerce').dropna()
+            ts_series = pd.to_datetime(df[timestamp_col], errors='coerce').dropna()
             time_range_days = (ts_series.max() - ts_series.min()).days
             gap_explanation = f"Внимание: данные охватывают период в {time_range_days} дней (с {ts_series.min().year} по {ts_series.max().year} год), поэтому использование единиц 'дн.' (дни) для длительности кейсов является корректным."
 
@@ -139,6 +139,6 @@ class VisualizationAgent:
                 "applied_functions": ["plt.savefig()", "df.value_counts()", "df.groupby().diff()", "pd.to_datetime()"]
             }, indent=2, ensure_ascii=False)
         except Exception as e:
-            cols = list(self.df.columns) if hasattr(self.df, 'columns') else "N/A"
+            cols = list(df.columns) if hasattr(df, 'columns') else "N/A"
             return json.dumps({"error": f"Visualization failed: {e}. Columns: {cols}"}, ensure_ascii=False)
 

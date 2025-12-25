@@ -25,21 +25,21 @@ class ProcessAnalysisAgent:
         """
         Analyzes process performance and returns strict analysis_result.json.
         """
-        self.df = self.df.copy() # Isolate
-        self.df_orig = self.df.copy() # For debugging
+        df = self.df.copy() # Isolate
+        self.df_orig = df.copy() # For debugging
         
         # 0. Deduplicate column names (common issue with dirty CSVs)
-        if self.df.columns.duplicated().any():
+        if df.columns.duplicated().any():
             new_cols = []
             counts = {}
-            for col in self.df.columns:
+            for col in df.columns:
                 if col in counts:
                     counts[col] += 1
                     new_cols.append(f"{col}_{counts[col]}")
                 else:
                     counts[col] = 0
                     new_cols.append(col)
-            self.df.columns = new_cols
+            df.columns = new_cols
         # Normalize keys and handle variations
         def get_col(keys, d):
             for k in keys:
@@ -56,75 +56,77 @@ class ProcessAnalysisAgent:
         timestamp_col = get_col(['timestamp', 'time', 'date', 'time:timestamp'], pm_columns)
 
         # Validation and Fallback (Same as DiscoveryAgent)
-        if not activity_col or activity_col not in self.df.columns:
-            for c in self.df.columns:
+        if not activity_col or activity_col not in df.columns:
+            for c in df.columns:
                 if 'activity' in c.lower() or 'operation' in c.lower() or 'event' in c.lower():
                     activity_col = c
                     break
         
-        if not timestamp_col or timestamp_col not in self.df.columns:
-             for c in self.df.columns:
+        if not timestamp_col or timestamp_col not in df.columns:
+             for c in df.columns:
                 if 'time' in c.lower() or 'date' in c.lower():
                     timestamp_col = c
                     break
 
-        if not case_col or (case_col not in self.df.columns and case_col != 'case_id_synth'):
-             for c in self.df.columns:
+        if not case_col or (case_col not in df.columns and case_col != 'case_id_synth'):
+             for c in df.columns:
                 if 'case' in c.lower() or 'id' in c.lower():
                     case_col = c
                     break
 
         # 1.2 Ensure Timestamp is Datetime (CRITICAL for pm4py)
-        if timestamp_col in self.df.columns:
+        if timestamp_col in df.columns:
             try:
-                # Handle duplicate column names (self.df[col] returns a DataFrame)
-                ts_data = self.df[timestamp_col]
+                # Handle duplicate column names (df[col] returns a DataFrame)
+                ts_data = df[timestamp_col]
                 if isinstance(ts_data, pd.DataFrame):
                     ts_data = ts_data.iloc[:, 0]
                 
                 if not pd.api.types.is_datetime64_any_dtype(ts_data):
-                    self.df[timestamp_col] = pd.to_datetime(ts_data, errors='coerce')
+                    # Robust conversion: handle objects that might be Timestamps already
+                    df[timestamp_col] = pd.to_datetime(ts_data, errors='coerce')
                 
                 # Drop rows where timestamp couldn't be parsed
-                if self.df[timestamp_col].isna().any().any() if isinstance(self.df[timestamp_col], pd.DataFrame) else self.df[timestamp_col].isna().any():
-                    self.df = self.df.dropna(subset=[timestamp_col])
+                if df[timestamp_col].isna().any().any() if isinstance(df[timestamp_col], pd.DataFrame) else df[timestamp_col].isna().any():
+                    df = df.dropna(subset=[timestamp_col])
             except Exception as e:
-                col_type = str(type(self.df[timestamp_col]))
+                col_type = str(type(df[timestamp_col]))
                 return json.dumps({"error": f"Failed to convert timestamp column '{timestamp_col}' (Type: {col_type}) to datetime: {e}"}, ensure_ascii=False)
 
         # 1. Synthetic Case ID if needed
         use_synthetic = False
-        if not case_col or (case_col not in self.df.columns and case_col != 'case_id_synth'):
+        if not case_col or (case_col not in df.columns and case_col != 'case_id_synth'):
             use_synthetic = True
-        elif case_col in self.df.columns and self.df[case_col].nunique() > len(self.df) * 0.9:
+        elif case_col in df.columns and df[case_col].nunique() > len(df) * 0.9:
             use_synthetic = True
             
         if use_synthetic:
-            if timestamp_col in self.df.columns:
-                self.df = self.df.sort_values(timestamp_col)
-                self.df[timestamp_col] = pd.to_datetime(self.df[timestamp_col], errors='coerce')
-                self.df['case_id_synth'] = (self.df[timestamp_col].diff() > pd.Timedelta("30min")).cumsum()
+            if timestamp_col in df.columns:
+                df = df.sort_values(timestamp_col)
+                df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+                df['case_id_synth'] = (df[timestamp_col].diff() > pd.Timedelta("30min")).cumsum()
                 case_col = 'case_id_synth'
             else:
                 # Last resort: just index
-                self.df['case_id_synth'] = self.df.index // 10
+                df['case_id_synth'] = df.index // 10
                 case_col = 'case_id_synth'
 
         # 2. Format DataFrame
         try:
             # Diagnostic: Ensure columns exist
             missing = []
-            if activity_col not in self.df.columns: missing.append(f"activity({activity_col})")
-            if timestamp_col not in self.df.columns: missing.append(f"timestamp({timestamp_col})")
+            if activity_col not in df.columns: missing.append(f"activity({activity_col})")
+            if timestamp_col not in df.columns: missing.append(f"timestamp({timestamp_col})")
             # case_col might be synthetic, so we check it after potential generation
-            if case_col not in self.df.columns: missing.append(f"case({case_col})")
+            if case_col not in df.columns: missing.append(f"case({case_col})")
             
             if missing:
-                cols_list = list(self.df.columns)
+                cols_list = list(df.columns)
                 return json.dumps({"error": f"Missing columns: {', '.join(missing)}. Available: {cols_list}"}, ensure_ascii=False)
 
-            if self.df.empty:
+            if df.empty:
                 cols_info = {c: str(self.df_orig[c].dtype) if c in self.df_orig.columns else "N/A" for c in [case_col, activity_col, timestamp_col]}
+                sample_vals = {c: str(list(self.df_orig[c].head(3))) if c in self.df_orig.columns else "N/A" for c in [case_col, activity_col, timestamp_col]}
                 return json.dumps({
                     "error": "DataFrame is empty after processing. Cannot perform analysis.",
                     "debug_info": {
@@ -135,12 +137,13 @@ class ProcessAnalysisAgent:
                             "timestamp": timestamp_col
                         },
                         "column_types": cols_info,
+                        "sample_values": sample_vals,
                         "available_columns": list(self.df_orig.columns)
                     }
                 }, ensure_ascii=False)
 
             formatted_df = pm4py.format_dataframe(
-                self.df,
+                df,
                 case_id=case_col,
                 activity_key=activity_col,
                 timestamp_key=timestamp_col
@@ -149,7 +152,7 @@ class ProcessAnalysisAgent:
             if formatted_df.empty:
                 return json.dumps({"error": "pm4py.format_dataframe returned an empty result. Check your column mappings and data types."}, ensure_ascii=False)
         except Exception as e:
-             return json.dumps({"error": f"pm4py formatting failed: {e}. Columns: {list(self.df.columns)}, Activity: {activity_col}"}, ensure_ascii=False)
+             return json.dumps({"error": f"pm4py formatting failed: {e}. Columns: {list(df.columns)}, Activity: {activity_col}"}, ensure_ascii=False)
 
         try:
             # 3. Performance Metrics (Python Fact)
@@ -213,12 +216,15 @@ class ProcessAnalysisAgent:
             time_range_days = (formatted_df[timestamp_col_std].max() - formatted_df[timestamp_col_std].min()).days
             gap_explanation = f"Внимание: данные охватывают период в {time_range_days} дней (с {formatted_df[timestamp_col_std].min().year} по {formatted_df[timestamp_col_std].max().year} год), поэтому использование единиц 'дн.' для длительности кейсов является корректным и адекватным."
 
+            mean_str = f"{duration_stats['mean']['value']} {duration_stats['mean']['unit']}" if duration_stats else "N/A"
+            p95_str = f"{duration_stats['p95']['value']} {duration_stats['p95']['unit']}" if duration_stats else "N/A"
+
             result = {
                 "cases": int(formatted_df[case_col].nunique()),
                 "case_duration": duration_stats,
                 "bottlenecks": bottlenecks,
                 "anomalies": anomalies,
-                "thoughts": f"Анализ производительности выполнен. {gap_explanation} {evidence_str}",
+                "thoughts": f"Анализ производительности выполнен. Среднее время кейса: {mean_str}, P95: {p95_str}. {gap_explanation} {evidence_str}",
                 "applied_functions": ["pm4py.get_all_case_durations()", "df.groupby().diff()", "np.percentile()"]
             }
             

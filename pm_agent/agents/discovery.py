@@ -13,21 +13,21 @@ class ProcessDiscoveryAgent:
         """
         Discovers process model and returns strict discovery_result.json.
         """
-        self.df = self.df.copy() # Isolate
-        self.df_orig = self.df.copy() # For debugging
+        df = self.df.copy() # Isolate
+        self.df_orig = df.copy() # For debugging
         
         # 0. Deduplicate column names
-        if self.df.columns.duplicated().any():
+        if df.columns.duplicated().any():
             new_cols = []
             counts = {}
-            for col in self.df.columns:
+            for col in df.columns:
                 if col in counts:
                     counts[col] += 1
                     new_cols.append(f"{col}_{counts[col]}")
                 else:
                     counts[col] = 0
                     new_cols.append(col)
-            self.df.columns = new_cols
+            df.columns = new_cols
         # 1. Identify Columns (if needed)
         if not pm_columns:
             system_prompt = (
@@ -35,7 +35,7 @@ class ProcessDiscoveryAgent:
                 "Верни ТОЛЬКО JSON: "
                 '{"case_id": "ColName", "activity": "ColName", "timestamp": "ColName"}'
             )
-            prompt = f"Columns: {self.df.columns.tolist()}\nHead:\n{self.df.head(3).to_string()}"
+            prompt = f"Columns: {df.columns.tolist()}\nHead:\n{df.head(3).to_string()}"
             
             resp = self.llm.generate_response(prompt, system_prompt)
             try:
@@ -65,21 +65,21 @@ class ProcessDiscoveryAgent:
         timestamp_key = get_col(['timestamp', 'time', 'date', 'time:timestamp'], pm_columns)
         
         # Validation and Fallback
-        if not activity_key or activity_key not in self.df.columns:
+        if not activity_key or activity_key not in df.columns:
             # Try to find something that looks like activity
-            for c in self.df.columns:
+            for c in df.columns:
                 if 'activity' in c.lower() or 'operation' in c.lower() or 'event' in c.lower():
                     activity_key = c
                     break
         
-        if not timestamp_key or timestamp_key not in self.df.columns:
-             for c in self.df.columns:
+        if not timestamp_key or timestamp_key not in df.columns:
+             for c in df.columns:
                 if 'time' in c.lower() or 'date' in c.lower():
                     timestamp_key = c
                     break
 
-        if not case_id or (case_id not in self.df.columns and case_id != 'case_id_synth'):
-             for c in self.df.columns:
+        if not case_id or (case_id not in df.columns and case_id != 'case_id_synth'):
+             for c in df.columns:
                 if 'case' in c.lower() or 'id' in c.lower():
                     case_id = c
                     break
@@ -92,34 +92,34 @@ class ProcessDiscoveryAgent:
         }
 
         # 1.2 Ensure Timestamp is Datetime (CRITICAL for pm4py)
-        if timestamp_key in self.df.columns:
+        if timestamp_key in df.columns:
             try:
                 # Handle duplicate column names
-                ts_data = self.df[timestamp_key]
+                ts_data = df[timestamp_key]
                 if isinstance(ts_data, pd.DataFrame):
                     ts_data = ts_data.iloc[:, 0]
 
                 if not pd.api.types.is_datetime64_any_dtype(ts_data):
-                    self.df[timestamp_key] = pd.to_datetime(ts_data, errors='coerce')
+                    df[timestamp_key] = pd.to_datetime(ts_data, errors='coerce')
                 
                 # Drop rows where timestamp couldn't be parsed
-                if self.df[timestamp_key].isna().any().any() if isinstance(self.df[timestamp_key], pd.DataFrame) else self.df[timestamp_key].isna().any():
-                    self.df = self.df.dropna(subset=[timestamp_key])
+                if df[timestamp_key].isna().any().any() if isinstance(df[timestamp_key], pd.DataFrame) else df[timestamp_key].isna().any():
+                    df = df.dropna(subset=[timestamp_key])
             except Exception as e:
-                col_type = str(type(self.df[timestamp_key]))
+                col_type = str(type(df[timestamp_key]))
                 return json.dumps({"error": f"Failed to convert timestamp column '{timestamp_key}' (Type: {col_type}) to datetime: {e}"}, ensure_ascii=False)
         
         # 1.5 Synthetic Case ID if needed
-        if not case_id or self.df[case_id].nunique() > len(self.df) * 0.9:
-            self.df = self.df.sort_values(timestamp_key)
-            self.df[timestamp_key] = pd.to_datetime(self.df[timestamp_key], errors='coerce')
-            self.df['case_id_synth'] = (self.df[timestamp_key].diff() > pd.Timedelta("30min")).cumsum()
+        if not case_id or df[case_id].nunique() > len(df) * 0.9:
+            df = df.sort_values(timestamp_key)
+            df[timestamp_key] = pd.to_datetime(df[timestamp_key], errors='coerce')
+            df['case_id_synth'] = (df[timestamp_key].diff() > pd.Timedelta("30min")).cumsum()
             case_id = 'case_id_synth'
             pm_columns['case_id'] = case_id
         
         # 2. Format DataFrame
         try:
-            if self.df.empty:
+            if df.empty:
                 cols_info = {c: str(self.df_orig[c].dtype) if c in self.df_orig.columns else "N/A" for c in [case_id, activity_key, timestamp_key]}
                 return json.dumps({
                     "error": "DataFrame is empty after processing. Cannot perform discovery.",
@@ -136,7 +136,7 @@ class ProcessDiscoveryAgent:
                 }, ensure_ascii=False)
                 
             formatted_df = pm4py.format_dataframe(
-                self.df,
+                df,
                 case_id=case_id,
                 activity_key=activity_key,
                 timestamp_key=timestamp_key
@@ -218,16 +218,20 @@ class ProcessDiscoveryAgent:
                 
                 mermaid_code = "\n".join(mermaid_lines)
 
+            num_activities = int(formatted_df[activity_key].nunique())
+            num_edges = len(dfg)
+            top_start = max(start_activities.items(), key=lambda x: x[1])[0] if start_activities else "N/A"
+
             result = {
                 "pm_columns": pm_columns,
-                "activities": int(formatted_df[activity_key].nunique()),
-                "edges": len(dfg),
+                "activities": num_activities,
+                "edges": num_edges,
                 "start_activities": [{"activity": k, "count": int(v)} for k, v in start_activities.items()],
                 "end_activities": [{"activity": k, "count": int(v)} for k, v in end_activities.items()],
                 "top_transitions": transitions[:10],
                 "loops": loops,
                 "mermaid": mermaid_code,
-                "thoughts": "Процесс успешно восстановлен. Сгенерирована интерактивная схема (Mermaid).",
+                "thoughts": f"Процесс успешно восстановлен. Обнаружено {num_activities} активностей и {num_edges} переходов. Основная стартовая активность: '{top_start}'. Сгенерирована интерактивная схема (Mermaid).",
                 "applied_functions": ["pm4py.discover_dfg()", "mermaid_generation"]
             }
             
