@@ -29,7 +29,9 @@ class ProcessDiscoveryAgent:
                     new_cols.append(col)
             df.columns = new_cols
 
-            df.columns = new_cols
+        # 0.5 Drop existing pm4py columns IMMEDIATELY to avoid any conflicts
+        pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
+        df = df.drop(columns=[c for c in pm4py_cols if c in df.columns])
 
         # 1. Identify Columns (if needed)
         if not pm_columns:
@@ -102,13 +104,14 @@ class ProcessDiscoveryAgent:
                 if isinstance(ts_data, pd.DataFrame):
                     ts_data = ts_data.iloc[:, 0]
 
-                if not pd.api.types.is_datetime64_any_dtype(ts_data):
-                    # Robust conversion: handle objects that might be Timestamps already
-                    df[timestamp_key] = pd.to_datetime(ts_data, errors='coerce')
+                # FORCE conversion to datetime64[ns]
+                df[timestamp_key] = pd.to_datetime(ts_data, errors='coerce')
                 
                 # Drop rows where timestamp couldn't be parsed
-                if df[timestamp_key].isna().any().any() if isinstance(df[timestamp_key], pd.DataFrame) else df[timestamp_key].isna().any():
-                    df = df.dropna(subset=[timestamp_key])
+                df = df.dropna(subset=[timestamp_key])
+                
+                # CRITICAL: Convert to pydatetime for pm4py compatibility
+                df[timestamp_key] = df[timestamp_key].dt.to_pydatetime()
             except Exception as e:
                 col_type = str(type(df[timestamp_key]))
                 return json.dumps({"error": f"Failed to convert timestamp column '{timestamp_key}' (Type: {col_type}) to datetime: {e}"}, ensure_ascii=False)
@@ -116,12 +119,15 @@ class ProcessDiscoveryAgent:
         # 1.5 Synthetic Case ID if needed
         if not case_id or df[case_id].nunique() > len(df) * 0.9:
             df = df.sort_values(timestamp_key)
-            df[timestamp_key] = pd.to_datetime(df[timestamp_key], errors='coerce')
+            # Re-ensure datetime for synth calculation
+            df[timestamp_key] = pd.to_datetime(df[timestamp_key])
             df['case_id_synth'] = (df[timestamp_key].diff() > pd.Timedelta("30min")).cumsum()
             case_id = 'case_id_synth'
             pm_columns['case_id'] = case_id
+            # Re-convert to pydatetime after synth calculation
+            df[timestamp_key] = df[timestamp_key].dt.to_pydatetime()
         
-        # 1.7 Drop existing pm4py columns to avoid conflicts, UNLESS they are the source
+        # 1.7 Drop existing pm4py columns to avoid conflicts
         pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
         cols_to_drop = [c for c in pm4py_cols if c in df.columns and c not in [case_id, activity_key, timestamp_key]]
         if cols_to_drop:
@@ -163,6 +169,33 @@ class ProcessDiscoveryAgent:
             start_activities = pm4py.get_start_activities(formatted_df)
             end_activities = pm4py.get_end_activities(formatted_df)
             dfg, start_acts, end_acts = pm4py.discover_dfg(formatted_df)
+            
+            # Save DFG as PNG for evidence
+            abs_dfg_path = None
+            try:
+                dfg_path = os.path.join(output_dir, "process_discovery_dfg.png")
+                pm4py.save_vis_dfg(dfg, start_acts, end_acts, dfg_path)
+                abs_dfg_path = os.path.abspath(dfg_path).replace("\\", "/")
+            except Exception as vis_e:
+                print(f"Warning: DFG visualization failed (likely missing Graphviz): {vis_e}")
+                # Fallback: Bar chart of top transitions
+                try:
+                    import matplotlib.pyplot as plt
+                    plt.figure(figsize=(10, 6))
+                    top_t = transitions[:10]
+                    labels = [f"{t['from']} -> {t['to']}" for t in top_t]
+                    counts = [t['count'] for t in top_t]
+                    plt.barh(labels[::-1], counts[::-1], color='skyblue')
+                    plt.title("Top 10 Transitions (Frequency)")
+                    plt.xlabel("Count")
+                    plt.tight_layout()
+                    
+                    fallback_path = os.path.join(output_dir, "process_discovery_top_transitions.png")
+                    plt.savefig(fallback_path)
+                    plt.close()
+                    abs_dfg_path = os.path.abspath(fallback_path).replace("\\", "/")
+                except Exception as plt_e:
+                    print(f"Fallback visualization failed: {plt_e}")
             
             transitions = []
             for (act_from, act_to), count in dfg.items():
@@ -242,13 +275,16 @@ class ProcessDiscoveryAgent:
                 "top_transitions": transitions[:10],
                 "loops": loops,
                 "mermaid": mermaid_code,
-                "thoughts": f"Процесс успешно восстановлен. Обнаружено {num_activities} активностей и {num_edges} переходов. "
-                            f"Основная стартовая активность: '{top_start}', основная конечная: '{top_end}'. "
-                            f"Доказательства: сгенерирована интерактивная схема (Mermaid), расчеты выполнены через pm4py.discover_dfg().",
-                "applied_functions": ["pm4py.discover_dfg()", "mermaid_generation"]
+                "image_dfg": abs_dfg_path,
+                "thoughts": f"Процесс успешно восстановлен. ОБЩАЯ СТАТИСТИКА: Обнаружено {num_activities} активностей, {num_edges} переходов и {len(loops)} циклов (петель). "
+                            f"КЛЮЧЕВЫЕ ТОЧКИ: Основная стартовая активность - '{top_start}', основная конечная - '{top_end}'. "
+                            f"УЗКИЕ МЕСТА (Bottlenecks): Наиболее частые переходы: {', '.join([f'{t['from']} -> {t['to']} ({t['count']})' for t in transitions[:3]])}. "
+                            f"ДОКАЗАТЕЛЬСТВА: Сгенерирована схема Mermaid{f' и файл [process_discovery_dfg.png]({abs_dfg_path})' if abs_dfg_path else ''}. Расчеты выполнены через pm4py.discover_dfg().",
+                "applied_functions": ["pm4py.discover_dfg()", "pm4py.save_vis_dfg()", "mermaid_generation"]
             }
             
             return json.dumps(result, indent=2, ensure_ascii=False)
+
 
         except Exception as e:
             return json.dumps({"error": f"Process discovery failed: {e}"}, ensure_ascii=False)

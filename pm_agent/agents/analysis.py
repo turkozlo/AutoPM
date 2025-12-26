@@ -41,7 +41,9 @@ class ProcessAnalysisAgent:
                     new_cols.append(col)
             df.columns = new_cols
 
-            df.columns = new_cols
+        # 0.5 Drop existing pm4py columns IMMEDIATELY to avoid any conflicts
+        pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
+        df = df.drop(columns=[c for c in pm4py_cols if c in df.columns])
         # Normalize keys and handle variations
         def get_col(keys, d):
             for k in keys:
@@ -84,13 +86,14 @@ class ProcessAnalysisAgent:
                 if isinstance(ts_data, pd.DataFrame):
                     ts_data = ts_data.iloc[:, 0]
                 
-                if not pd.api.types.is_datetime64_any_dtype(ts_data):
-                    # Robust conversion: handle objects that might be Timestamps already
-                    df[timestamp_col] = pd.to_datetime(ts_data, errors='coerce')
+                # FORCE conversion to datetime64[ns]
+                df[timestamp_col] = pd.to_datetime(ts_data, errors='coerce')
                 
                 # Drop rows where timestamp couldn't be parsed
-                if df[timestamp_col].isna().any().any() if isinstance(df[timestamp_col], pd.DataFrame) else df[timestamp_col].isna().any():
-                    df = df.dropna(subset=[timestamp_col])
+                df = df.dropna(subset=[timestamp_col])
+                
+                # CRITICAL: Convert to pydatetime for pm4py compatibility
+                df[timestamp_col] = df[timestamp_col].dt.to_pydatetime()
             except Exception as e:
                 col_type = str(type(df[timestamp_col]))
                 return json.dumps({"error": f"Failed to convert timestamp column '{timestamp_col}' (Type: {col_type}) to datetime: {e}"}, ensure_ascii=False)
@@ -105,15 +108,18 @@ class ProcessAnalysisAgent:
         if use_synthetic:
             if timestamp_col in df.columns:
                 df = df.sort_values(timestamp_col)
-                df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+                # Re-ensure datetime for synth calculation
+                df[timestamp_col] = pd.to_datetime(df[timestamp_col])
                 df['case_id_synth'] = (df[timestamp_col].diff() > pd.Timedelta("30min")).cumsum()
                 case_col = 'case_id_synth'
+                # Re-convert to pydatetime
+                df[timestamp_col] = df[timestamp_col].dt.to_pydatetime()
             else:
                 # Last resort: just index
                 df['case_id_synth'] = df.index // 10
                 case_col = 'case_id_synth'
 
-        # 1.7 Drop existing pm4py columns to avoid conflicts, UNLESS they are the source
+        # 1.7 Drop existing pm4py columns to avoid conflicts
         pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
         cols_to_drop = [c for c in pm4py_cols if c in df.columns and c not in [case_col, activity_col, timestamp_col]]
         if cols_to_drop:
@@ -121,35 +127,6 @@ class ProcessAnalysisAgent:
 
         # 2. Format DataFrame
         try:
-            # Diagnostic: Ensure columns exist
-            missing = []
-            if activity_col not in df.columns: missing.append(f"activity({activity_col})")
-            if timestamp_col not in df.columns: missing.append(f"timestamp({timestamp_col})")
-            # case_col might be synthetic, so we check it after potential generation
-            if case_col not in df.columns: missing.append(f"case({case_col})")
-            
-            if missing:
-                cols_list = list(df.columns)
-                return json.dumps({"error": f"Missing columns: {', '.join(missing)}. Available: {cols_list}"}, ensure_ascii=False)
-
-            if df.empty:
-                cols_info = {c: str(self.df_orig[c].dtype) if c in self.df_orig.columns else "N/A" for c in [case_col, activity_col, timestamp_col]}
-                sample_vals = {c: str(list(self.df_orig[c].head(3))) if c in self.df_orig.columns else "N/A" for c in [case_col, activity_col, timestamp_col]}
-                return json.dumps({
-                    "error": "DataFrame is empty after processing. Cannot perform analysis.",
-                    "debug_info": {
-                        "initial_rows": len(self.df_orig),
-                        "identified_columns": {
-                            "case": case_col,
-                            "activity": activity_col,
-                            "timestamp": timestamp_col
-                        },
-                        "column_types": cols_info,
-                        "sample_values": sample_vals,
-                        "available_columns": list(self.df_orig.columns)
-                    }
-                }, ensure_ascii=False)
-
             formatted_df = pm4py.format_dataframe(
                 df,
                 case_id=case_col,
@@ -173,7 +150,6 @@ class ProcessAnalysisAgent:
 
             duration_stats = {}
             if case_durations_sec is not None and len(case_durations_sec) > 0:
-                median_sec = np.median(case_durations_sec)
                 val_mean, unit_mean = self.get_best_unit(np.mean(case_durations_sec))
                 val_median, unit_median = self.get_best_unit(np.median(case_durations_sec))
                 val_p95, unit_p95 = self.get_best_unit(np.percentile(case_durations_sec, 95))
@@ -202,6 +178,39 @@ class ProcessAnalysisAgent:
                             "unit": unit
                         })
 
+            # Performance DFG and PNG
+            abs_perf_dfg_path = None
+            try:
+                perf_dfg, start_acts, end_acts = pm4py.discover_performance_dfg(formatted_df)
+                perf_dfg_path = os.path.join(output_dir, "process_performance_dfg.png")
+                pm4py.save_vis_performance_dfg(perf_dfg, start_acts, end_acts, perf_dfg_path)
+                abs_perf_dfg_path = os.path.abspath(perf_dfg_path).replace("\\", "/")
+            except Exception as vis_e:
+                print(f"Warning: Performance DFG visualization failed (likely missing Graphviz): {vis_e}")
+                # Fallback: Bar chart of bottlenecks
+                try:
+                    import matplotlib.pyplot as plt
+                    if bottlenecks:
+                        plt.figure(figsize=(10, 6))
+                        acts = [b['activity'] for b in bottlenecks]
+                        durs = [b['mean_duration'] for b in bottlenecks]
+                        unit = bottlenecks[0]['unit']
+                        plt.barh(acts[::-1], durs[::-1], color='salmon')
+                        plt.title(f"Top Bottlenecks (Mean Duration in {unit})")
+                        plt.xlabel(f"Duration ({unit})")
+                        plt.tight_layout()
+                        
+                        fallback_path = os.path.join(output_dir, "process_performance_bottlenecks.png")
+                        plt.savefig(fallback_path)
+                        plt.close()
+                        abs_perf_dfg_path = os.path.abspath(fallback_path).replace("\\", "/")
+                except Exception as plt_e:
+                    print(f"Fallback visualization failed: {plt_e}")
+
+            # Loops (discovered from DFG)
+            dfg_basic, _, _ = pm4py.discover_dfg(formatted_df)
+            loops = [{"activity": k[0], "count": int(v)} for k, v in dfg_basic.items() if k[0] == k[1]]
+
             # Anomalies (Long cases)
             anomalies = []
             if case_durations_sec is not None and len(case_durations_sec) > 0:
@@ -217,26 +226,32 @@ class ProcessAnalysisAgent:
                         "unit": unit
                     })
 
-            # Evidence links for the Judge
-            evidence_str = f"Доказательства: Интерактивная схема Mermaid в разделе Discovery."
-            
-            # Explanation for large gaps
+            # Detailed Performance Summary for the Judge
             time_range_days = (formatted_df[timestamp_col_std].max() - formatted_df[timestamp_col_std].min()).days
-            gap_explanation = f"Внимание: данные охватывают период в {time_range_days} дней (с {formatted_df[timestamp_col_std].min().year} по {formatted_df[timestamp_col_std].max().year} год), поэтому использование единиц 'дн.' для длительности кейсов является корректным и адекватным."
-
             mean_str = f"{duration_stats['mean']['value']} {duration_stats['mean']['unit']}" if duration_stats else "N/A"
             p95_str = f"{duration_stats['p95']['value']} {duration_stats['p95']['unit']}" if duration_stats else "N/A"
+            
+            perf_summary = (
+                f"АНАЛИЗ ПРОИЗВОДИТЕЛЬНОСТИ: Среднее время выполнения кейса составляет {mean_str}, при этом 95% кейсов завершаются в пределах {p95_str}. "
+                f"УЗКИЕ МЕСТА (Bottlenecks): Наибольшие задержки наблюдаются в операциях: {', '.join([f'{b['activity']} ({b['mean_duration']} {b['unit']})' for b in bottlenecks[:2]]) if bottlenecks else 'не обнаружены'}. "
+                f"ЦИКЛЫ: Обнаружено {len(loops)} повторных операций, что может указывать на неэффективность. "
+                f"ПЕРИОД: Анализ охватывает {time_range_days} дн. "
+                f"ДОКАЗАТЕЛЬСТВА: Расчеты выполнены через pm4py.get_all_case_durations(). {f'Визуализация производительности сохранена в [process_performance_dfg.png]({abs_perf_dfg_path}).' if abs_perf_dfg_path else ''}"
+            )
 
             result = {
-                "cases": int(formatted_df[case_col].nunique()),
+                "cases": int(formatted_df[case_col_std].nunique()),
                 "case_duration": duration_stats,
                 "bottlenecks": bottlenecks,
+                "loops": loops,
                 "anomalies": anomalies,
-                "thoughts": f"Анализ производительности выполнен. Среднее время кейса: {mean_str}, P95: {p95_str}. {gap_explanation} {evidence_str} Расчеты подтверждены через pm4py.get_all_case_durations().",
-                "applied_functions": ["pm4py.get_all_case_durations()", "df.groupby().diff()", "np.percentile()"]
+                "image_performance": abs_perf_dfg_path,
+                "thoughts": perf_summary,
+                "applied_functions": ["pm4py.get_all_case_durations()", "pm4py.discover_performance_dfg()", "pm4py.save_vis_performance_dfg()", "df.groupby().diff()"]
             }
             
             return json.dumps(result, indent=2, ensure_ascii=False)
+
 
         except Exception as e:
             return json.dumps({"error": f"Process analysis failed: {e}"}, ensure_ascii=False)

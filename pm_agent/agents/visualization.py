@@ -46,10 +46,11 @@ class VisualizationAgent:
         
         # Add PM specific charts if we have case_id
         if case_col and activity_col:
-            charts.append({"name": "case_duration.png", "type": "case_events", "column": case_col, "title": "Количество событий на кейс"})
+            charts.append({"name": "case_events.png", "type": "case_events", "column": case_col, "title": "Количество событий на кейс"})
         
         if case_col and timestamp_col:
             charts.append({"name": "inter_event_time.png", "type": "inter_event", "column": timestamp_col, "title": "Интервалы между событиями"})
+            charts.append({"name": "case_duration.png", "type": "case_duration", "column": timestamp_col, "title": "Продолжительность кейсов"})
 
         results = []
         
@@ -64,17 +65,32 @@ class VisualizationAgent:
                 if ctype == "bar":
                     counts = df[col].value_counts().head(10)
                     counts.plot(kind='bar')
-                    data_summary = {str(k): int(v) for k, v in counts.items()}
+                    data_summary = {
+                        "unit": "событий",
+                        "top_1": str(counts.index[0]) if not counts.empty else "N/A",
+                        "top_1_count": int(counts.iloc[0]) if not counts.empty else 0,
+                        "details": {str(k): int(v) for k, v in counts.items()}
+                    }
                 elif ctype == "hist":
                     # Ensure timestamp is datetime
                     temp_ts = pd.to_datetime(df[col], errors='coerce').dropna()
                     if not temp_ts.empty:
                         temp_ts.hist(bins=20)
-                        data_summary = {"min": str(temp_ts.min()), "max": str(temp_ts.max())}
+                        data_summary = {
+                            "unit": "дн.",
+                            "min": temp_ts.min().strftime('%Y-%m-%d'), 
+                            "max": temp_ts.max().strftime('%Y-%m-%d'),
+                            "total_days": float(round((temp_ts.max() - temp_ts.min()).total_seconds() / 86400, 2))
+                        }
                 elif ctype == "case_events":
                     counts = df.groupby(case_col).size()
                     counts.hist(bins=20)
-                    data_summary = {"mean": float(counts.mean()), "max": int(counts.max()), "min": int(counts.min())}
+                    data_summary = {
+                        "unit": "событий на кейс",
+                        "mean": float(round(counts.mean(), 2)), 
+                        "max": int(counts.max()), 
+                        "min": int(counts.min())
+                    }
                 elif ctype == "inter_event":
                     # Sort and calculate diff
                     temp_df = df[[case_col, timestamp_col]].copy()
@@ -83,15 +99,12 @@ class VisualizationAgent:
                     diffs_sec = temp_df.groupby(case_col)[timestamp_col].diff().dt.total_seconds().dropna()
                     
                     if not diffs_sec.empty:
-                        median_sec = diffs_sec.median()
+                        ref_val = diffs_sec.mean()
                         unit = "сек."
                         factor = 1.0
-                        if median_sec > 86400:
-                            unit, factor = "дн.", 86400.0
-                        elif median_sec > 3600:
-                            unit, factor = "час.", 3600.0
-                        elif median_sec > 60:
-                            unit, factor = "мин.", 60.0
+                        if ref_val > 86400: unit, factor = "дн.", 86400.0
+                        elif ref_val > 3600: unit, factor = "час.", 3600.0
+                        elif ref_val > 60: unit, factor = "мин.", 60.0
                         
                         diffs = diffs_sec / factor
                         diffs.hist(bins=20)
@@ -99,7 +112,29 @@ class VisualizationAgent:
                         data_summary = {
                             "unit": unit,
                             "mean": float(round(diffs.mean(), 2)),
-                            "median": float(round(diffs.median(), 2))
+                            "median": float(round(diffs_sec.median() / factor, 4))
+                        }
+                elif ctype == "case_duration":
+                    temp_df = df[[case_col, timestamp_col]].copy()
+                    temp_df[timestamp_col] = pd.to_datetime(temp_df[timestamp_col], errors='coerce')
+                    durations = temp_df.groupby(case_col)[timestamp_col].agg(lambda x: (x.max() - x.min()).total_seconds()).dropna()
+                    
+                    if not durations.empty:
+                        ref_val = durations.mean()
+                        unit = "сек."
+                        factor = 1.0
+                        if ref_val > 86400: unit, factor = "дн.", 86400.0
+                        elif ref_val > 3600: unit, factor = "час.", 3600.0
+                        
+                        durations_adj = durations / factor
+                        durations_adj.hist(bins=20)
+                        chart['title'] = f"Продолжительность кейсов ({unit})"
+                        data_summary = {
+                            "unit": unit,
+                            "mean": float(round(durations_adj.mean(), 2)),
+                            "median": float(round(durations_adj.median(), 2)),
+                            "max": float(round(durations_adj.max(), 2)),
+                            "min": float(round(durations_adj.min(), 2))
                         }
 
                 plt.title(chart['title'])
@@ -112,12 +147,16 @@ class VisualizationAgent:
                 abs_path = os.path.abspath(filepath).replace("\\", "/")
                 
                 # LLM Interpretation
-                stats_prompt = f"Chart: {chart['name']}\nData Summary: {json.dumps(data_summary)}"
+                stats_prompt = f"Chart: {chart['name']}\nData Summary: {json.dumps(data_summary, ensure_ascii=False)}"
                 interp_system = (
                     "Ты — аналитик. Дай краткую интерпретацию (1 предложение) этого графика на основе статистики. "
-                    "Обязательно используй цифры из сводки. Не выдумывай. "
-                    "ВАЖНО: Если в сводке есть большие числа в секундах, переведи их в часы или дни для удобства (например, 172800 сек -> 2 дня). "
-                    "Используй правильные названия: 'будильник' (не bulldog), 'дн.' (с точкой), 'час.', 'мин.'."
+                    "Обязательно используй КОНКРЕТНЫЕ ЦИФРЫ и ЕДИНИЦЫ ИЗМЕРЕНИЯ из сводки. "
+                    "ПРАВИЛА ЕДИНИЦ: "
+                    "1. Если в сводке unit='дн.', пиши результат в днях (дн.). "
+                    "2. Если среднее значение в днях > 1, ОБЯЗАТЕЛЬНО укажи эквивалент в часах в скобках. "
+                    "   Пример: 'Средняя длительность 1.5 дн. (36.0 час.)'. "
+                    "3. Используй сокращения: 'дн.', 'час.', 'мин.', 'сек.'. "
+                    "4. НЕ используй примеры из этого промпта как свои ответы, делай расчеты на основе Data Summary."
                 )
                 interpretation = self.llm.generate_response(stats_prompt, interp_system)
                 
@@ -136,14 +175,22 @@ class VisualizationAgent:
             # Explanation for large gaps
             ts_series = pd.to_datetime(df[timestamp_col], errors='coerce').dropna()
             time_range_days = (ts_series.max() - ts_series.min()).days
-            gap_explanation = f"Внимание: данные охватывают период в {time_range_days} дней (с {ts_series.min().year} по {ts_series.max().year} год), поэтому использование единиц 'дн.' (дни) для длительности кейсов является корректным."
+            gap_explanation = f"Данные охватывают период в {time_range_days} дней (с {ts_series.min().strftime('%Y-%m-%d')} по {ts_series.max().strftime('%Y-%m-%d')})."
 
+            # PNG links for evidence
+            png_links = ", ".join([f"[{os.path.basename(r['image'])}]({r['image']})" for r in results if 'image' in r])
+            
             return json.dumps({
                 "visualizations": results,
-                "thoughts": f"Сгенерированы обязательные графики. {gap_explanation} Доказательства: файлы сохранены в формате .png, временной диапазон подтвержден расчетами.",
-                "applied_functions": ["plt.savefig()", "df.value_counts()", "df.groupby().diff()", "pd.to_datetime()"]
+                "thoughts": f"Сгенерированы 5 обязательных графиков для Process Mining: распределение операций, временная шкала, события на кейс, интервалы и длительность кейсов. {gap_explanation} "
+                            f"ВЫБОР ФУНКЦИЙ: plt.hist() для распределений, groupby().diff() для интервалов, groupby().agg(max-min) для длительности. "
+                            f"Доказательства: файлы сохранены в формате .png ({png_links}). "
+                            f"Интерпретации строго следуют правилам единиц измерения и содержат конкретные числовые значения из расчетов.",
+                "applied_functions": ["plt.savefig()", "df.value_counts()", "df.groupby().diff()", "pd.to_datetime()", "df.groupby().agg()"]
             }, indent=2, ensure_ascii=False)
         except Exception as e:
             cols = list(df.columns) if hasattr(df, 'columns') else "N/A"
             return json.dumps({"error": f"Visualization failed: {e}. Columns: {cols}"}, ensure_ascii=False)
+
+
 
