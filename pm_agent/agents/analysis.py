@@ -93,7 +93,8 @@ class ProcessAnalysisAgent:
                 df = df.dropna(subset=[timestamp_col])
                 
                 # CRITICAL: Convert to pydatetime for pm4py compatibility
-                df[timestamp_col] = df[timestamp_col].dt.to_pydatetime()
+                # We use a list comprehension to ensure we get native python datetime objects
+                df[timestamp_col] = [t.to_pydatetime() if hasattr(t, 'to_pydatetime') else t for t in df[timestamp_col]]
             except Exception as e:
                 col_type = str(type(df[timestamp_col]))
                 return json.dumps({"error": f"Failed to convert timestamp column '{timestamp_col}' (Type: {col_type}) to datetime: {e}"}, ensure_ascii=False)
@@ -112,8 +113,8 @@ class ProcessAnalysisAgent:
                 df[timestamp_col] = pd.to_datetime(df[timestamp_col])
                 df['case_id_synth'] = (df[timestamp_col].diff() > pd.Timedelta("30min")).cumsum()
                 case_col = 'case_id_synth'
-                # Re-convert to pydatetime
-                df[timestamp_col] = df[timestamp_col].dt.to_pydatetime()
+                # Re-convert to pydatetime after synth calculation
+                df[timestamp_col] = [t.to_pydatetime() if hasattr(t, 'to_pydatetime') else t for t in df[timestamp_col]]
             else:
                 # Last resort: just index
                 df['case_id_synth'] = df.index // 10
@@ -230,10 +231,11 @@ class ProcessAnalysisAgent:
             time_range_days = (formatted_df[timestamp_col_std].max() - formatted_df[timestamp_col_std].min()).days
             mean_str = f"{duration_stats['mean']['value']} {duration_stats['mean']['unit']}" if duration_stats else "N/A"
             p95_str = f"{duration_stats['p95']['value']} {duration_stats['p95']['unit']}" if duration_stats else "N/A"
+            median_str = f"{duration_stats['median']['value']} {duration_stats['median']['unit']}" if duration_stats else "N/A"
             
             perf_summary = (
-                f"АНАЛИЗ ПРОИЗВОДИТЕЛЬНОСТИ: Среднее время выполнения кейса составляет {mean_str}, при этом 95% кейсов завершаются в пределах {p95_str}. "
-                f"УЗКИЕ МЕСТА (Bottlenecks): Наибольшие задержки наблюдаются в операциях: {', '.join([f'{b['activity']} ({b['mean_duration']} {b['unit']})' for b in bottlenecks[:2]]) if bottlenecks else 'не обнаружены'}. "
+                f"АНАЛИЗ ПРОИЗВОДИТЕЛЬНОСТИ: Среднее время выполнения кейса составляет {mean_str}, медиана {median_str}, при этом 95% кейсов завершаются в пределах {p95_str}. "
+                f"УЗКИЕ МЕСТА (Bottlenecks): Наибольшие задержки наблюдаются в операциях: {', '.join([f'{b['activity']} ({b['mean_duration']} {b['unit']})' for b in bottlenecks[:3]]) if bottlenecks else 'не обнаружены'}. "
                 f"ЦИКЛЫ: Обнаружено {len(loops)} повторных операций, что может указывать на неэффективность. "
                 f"ПЕРИОД: Анализ охватывает {time_range_days} дн. "
                 f"ДОКАЗАТЕЛЬСТВА: Расчеты выполнены через pm4py.get_all_case_durations(). {f'Визуализация производительности сохранена в [process_performance_dfg.png]({abs_perf_dfg_path}).' if abs_perf_dfg_path else ''}"
@@ -251,6 +253,7 @@ class ProcessAnalysisAgent:
             }
             
             return json.dumps(result, indent=2, ensure_ascii=False)
+
 
 
         except Exception as e:

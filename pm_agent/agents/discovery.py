@@ -105,13 +105,16 @@ class ProcessDiscoveryAgent:
                     ts_data = ts_data.iloc[:, 0]
 
                 # FORCE conversion to datetime64[ns]
+                # Use a more robust approach: if it's already datetime-like, pd.to_datetime is fine.
+                # If it's object, try to convert to datetime, and if that fails, try string conversion first.
                 df[timestamp_key] = pd.to_datetime(ts_data, errors='coerce')
                 
                 # Drop rows where timestamp couldn't be parsed
                 df = df.dropna(subset=[timestamp_key])
                 
                 # CRITICAL: Convert to pydatetime for pm4py compatibility
-                df[timestamp_key] = df[timestamp_key].dt.to_pydatetime()
+                # We use a list comprehension to ensure we get native python datetime objects
+                df[timestamp_key] = [t.to_pydatetime() if hasattr(t, 'to_pydatetime') else t for t in df[timestamp_key]]
             except Exception as e:
                 col_type = str(type(df[timestamp_key]))
                 return json.dumps({"error": f"Failed to convert timestamp column '{timestamp_key}' (Type: {col_type}) to datetime: {e}"}, ensure_ascii=False)
@@ -125,7 +128,7 @@ class ProcessDiscoveryAgent:
             case_id = 'case_id_synth'
             pm_columns['case_id'] = case_id
             # Re-convert to pydatetime after synth calculation
-            df[timestamp_key] = df[timestamp_key].dt.to_pydatetime()
+            df[timestamp_key] = [t.to_pydatetime() if hasattr(t, 'to_pydatetime') else t for t in df[timestamp_key]]
         
         # 1.7 Drop existing pm4py columns to avoid conflicts
         pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
@@ -182,7 +185,13 @@ class ProcessDiscoveryAgent:
                 try:
                     import matplotlib.pyplot as plt
                     plt.figure(figsize=(10, 6))
-                    top_t = transitions[:10]
+                    # We need transitions list here, let's calculate it first
+                    temp_transitions = []
+                    for (act_from, act_to), count in dfg.items():
+                        temp_transitions.append({"from": act_from, "to": act_to, "count": int(count)})
+                    temp_transitions.sort(key=lambda x: x['count'], reverse=True)
+                    
+                    top_t = temp_transitions[:10]
                     labels = [f"{t['from']} -> {t['to']}" for t in top_t]
                     counts = [t['count'] for t in top_t]
                     plt.barh(labels[::-1], counts[::-1], color='skyblue')
@@ -198,12 +207,15 @@ class ProcessDiscoveryAgent:
                     print(f"Fallback visualization failed: {plt_e}")
             
             transitions = []
+            total_transitions_count = 0
             for (act_from, act_to), count in dfg.items():
+                c = int(count)
                 transitions.append({
                     "from": act_from,
                     "to": act_to,
-                    "count": int(count)
+                    "count": c
                 })
+                total_transitions_count += c
             transitions.sort(key=lambda x: x['count'], reverse=True)
 
             # Loops
@@ -276,14 +288,16 @@ class ProcessDiscoveryAgent:
                 "loops": loops,
                 "mermaid": mermaid_code,
                 "image_dfg": abs_dfg_path,
-                "thoughts": f"Процесс успешно восстановлен. ОБЩАЯ СТАТИСТИКА: Обнаружено {num_activities} активностей, {num_edges} переходов и {len(loops)} циклов (петель). "
+                "thoughts": f"Процесс успешно восстановлен. ОБЩАЯ СТАТИСТИКА: Обнаружено {num_activities} активностей, {num_edges} уникальных переходов (всего {total_transitions_count} событий перехода) и {len(loops)} циклов (петель). "
                             f"КЛЮЧЕВЫЕ ТОЧКИ: Основная стартовая активность - '{top_start}', основная конечная - '{top_end}'. "
                             f"УЗКИЕ МЕСТА (Bottlenecks): Наиболее частые переходы: {', '.join([f'{t['from']} -> {t['to']} ({t['count']})' for t in transitions[:3]])}. "
-                            f"ДОКАЗАТЕЛЬСТВА: Сгенерирована схема Mermaid{f' и файл [process_discovery_dfg.png]({abs_dfg_path})' if abs_dfg_path else ''}. Расчеты выполнены через pm4py.discover_dfg().",
+                            f"ДОКАЗАТЕЛЬСТВА: Сгенерирована схема Mermaid (см. ниже) и файл [process_discovery_dfg.png]({abs_dfg_path}). Расчеты выполнены через pm4py.discover_dfg().\n\n"
+                            f"```mermaid\n{mermaid_code}\n```",
                 "applied_functions": ["pm4py.discover_dfg()", "pm4py.save_vis_dfg()", "mermaid_generation"]
             }
             
             return json.dumps(result, indent=2, ensure_ascii=False)
+
 
 
         except Exception as e:

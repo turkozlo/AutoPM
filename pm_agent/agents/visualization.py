@@ -42,15 +42,9 @@ class VisualizationAgent:
         charts = [
             {"name": "operation_distribution.png", "type": "bar", "column": activity_col, "title": f"Частота операций ({activity_col})"},
             {"name": "timestamp_distribution.png", "type": "hist", "column": timestamp_col, "title": f"Распределение во времени ({timestamp_col})"},
+            {"name": "inter_event_time.png", "type": "inter_event", "column": timestamp_col, "title": "Интервалы между событиями"},
+            {"name": "case_duration.png", "type": "case_duration", "column": timestamp_col, "title": "Продолжительность кейсов"}
         ]
-        
-        # Add PM specific charts if we have case_id
-        if case_col and activity_col:
-            charts.append({"name": "case_events.png", "type": "case_events", "column": case_col, "title": "Количество событий на кейс"})
-        
-        if case_col and timestamp_col:
-            charts.append({"name": "inter_event_time.png", "type": "inter_event", "column": timestamp_col, "title": "Интервалы между событиями"})
-            charts.append({"name": "case_duration.png", "type": "case_duration", "column": timestamp_col, "title": "Продолжительность кейсов"})
 
         results = []
         
@@ -82,15 +76,6 @@ class VisualizationAgent:
                             "max": temp_ts.max().strftime('%Y-%m-%d'),
                             "total_days": float(round((temp_ts.max() - temp_ts.min()).total_seconds() / 86400, 2))
                         }
-                elif ctype == "case_events":
-                    counts = df.groupby(case_col).size()
-                    counts.hist(bins=20)
-                    data_summary = {
-                        "unit": "событий на кейс",
-                        "mean": float(round(counts.mean(), 2)), 
-                        "max": int(counts.max()), 
-                        "min": int(counts.min())
-                    }
                 elif ctype == "inter_event":
                     # Sort and calculate diff
                     temp_df = df[[case_col, timestamp_col]].copy()
@@ -182,12 +167,13 @@ class VisualizationAgent:
             
             return json.dumps({
                 "visualizations": results,
-                "thoughts": f"Сгенерированы 5 обязательных графиков для Process Mining: распределение операций, временная шкала, события на кейс, интервалы и длительность кейсов. {gap_explanation} "
+                "thoughts": f"Сгенерированы 4 обязательных графика для Process Mining: распределение операций, временная шкала, интервалы и длительность кейсов. {gap_explanation} "
                             f"ВЫБОР ФУНКЦИЙ: plt.hist() для распределений, groupby().diff() для интервалов, groupby().agg(max-min) для длительности. "
-                            f"Доказательства: файлы сохранены в формате .png ({png_links}). "
+                            f"Доказательства (PNG ссылки): {png_links}. "
                             f"Интерпретации строго следуют правилам единиц измерения и содержат конкретные числовые значения из расчетов.",
                 "applied_functions": ["plt.savefig()", "df.value_counts()", "df.groupby().diff()", "pd.to_datetime()", "df.groupby().agg()"]
             }, indent=2, ensure_ascii=False)
+
         except Exception as e:
             cols = list(df.columns) if hasattr(df, 'columns') else "N/A"
             return json.dumps({"error": f"Visualization failed: {e}. Columns: {cols}"}, ensure_ascii=False)
