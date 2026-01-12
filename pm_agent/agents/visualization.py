@@ -9,7 +9,7 @@ class VisualizationAgent:
         self.df = df
         self.llm = llm_client
 
-    def run(self, profiling_report: Dict[str, Any], output_dir: str = ".") -> str:
+    def run(self, profiling_report: Dict[str, Any], output_dir: str = ".", feedback: str = "") -> str:
         """
         Generates mandatory PM charts and asks LLM to interpret them.
         """
@@ -17,10 +17,22 @@ class VisualizationAgent:
         # 1. Identify Columns for PM Charts
         pm_readiness = profiling_report.get('process_mining_readiness', {})
         
+        # Helper to ensure string column names
+        def sanitize_col(val):
+            if isinstance(val, dict):
+                # Try to extract 'column' or 'name' or 'value'
+                for k in ['column', 'name', 'value', 'col']:
+                    if k in val: return str(val[k])
+                # Fallback: first value
+                return str(list(val.values())[0])
+            if isinstance(val, list):
+                return sanitize_col(val[0]) if val else None
+            return str(val) if val is not None else None
+
         # Try to find best candidates
-        activity_col = pm_readiness.get('activity_candidates', [None])[0]
-        timestamp_col = pm_readiness.get('timestamp_candidates', [None])[0]
-        case_col = pm_readiness.get('case_id_candidates', [None])[0]
+        activity_col = sanitize_col(pm_readiness.get('activity_candidates', [None])[0])
+        timestamp_col = sanitize_col(pm_readiness.get('timestamp_candidates', [None])[0])
+        case_col = sanitize_col(pm_readiness.get('case_id_candidates', [None])[0])
         
         # Fallback to first column if not found
         if not activity_col: activity_col = list(df.columns)[0]
@@ -38,13 +50,44 @@ class VisualizationAgent:
             df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
             df['case_id_synth'] = (df[timestamp_col].diff() > pd.Timedelta("30min")).cumsum()
             case_col = 'case_id_synth'
-
-        charts = [
-            {"name": "operation_distribution.png", "type": "bar", "column": activity_col, "title": f"Частота операций ({activity_col})"},
-            {"name": "timestamp_distribution.png", "type": "hist", "column": timestamp_col, "title": f"Распределение во времени ({timestamp_col})"},
-            {"name": "inter_event_time.png", "type": "inter_event", "column": timestamp_col, "title": "Интервалы между событиями"},
-            {"name": "case_duration.png", "type": "case_duration", "column": timestamp_col, "title": "Продолжительность кейсов"}
-        ]
+        
+        # 2. Ask LLM for Chart Plan
+        system_prompt = (
+            "Ты — Visualization Agent. Твоя задача — выбрать список графиков для Process Mining. "
+            "Доступные типы:\n"
+            "- 'bar': Для категориальных (распределение операций).\n"
+            "- 'hist': Гистограмма временных меток (распределение во времени).\n"
+            "- 'inter_event': Интервалы между событиями (требует Case ID + Timestamp).\n"
+            "- 'case_duration': Длительность кейсов (требует Case ID + Timestamp).\n\n"
+            "ПРАВИЛА:\n"
+            "1. Верни JSON список: [{'name': 'filename.png', 'type': 'type', 'column': 'col_name', 'title': 'Title'}].\n"
+            "2. ОБЯЗАТЕЛЬНО включи 4 стандартных графика, если данные позволяют.\n"
+            "3. Учти 'feedback' от Судьи (если есть), чтобы исправить ошибки прошлого запуска."
+        )
+        
+        prompt = (
+            f"Candidates:\nActivity: {activity_col}\nTimestamp: {timestamp_col}\nCase ID: {case_col}\n"
+            f"Columns: {list(df.columns)}"
+        )
+        if feedback:
+            prompt += f"\n\nКРИТИКА СУДЬИ (ИСПРАВЬ ОШИБКИ): {feedback}"
+            
+        plan_resp = self.llm.generate_response(prompt, system_prompt)
+        
+        charts = []
+        try:
+            start = plan_resp.find('[')
+            end = plan_resp.rfind(']') + 1
+            if start != -1 and end != -1:
+                charts = json.loads(plan_resp[start:end])
+        except:
+             # Fallback if LLM fails
+             charts = [
+                {"name": "operation_distribution.png", "type": "bar", "column": activity_col, "title": f"Частота операций ({activity_col})"},
+                {"name": "timestamp_distribution.png", "type": "hist", "column": timestamp_col, "title": f"Распределение во времени ({timestamp_col})"},
+                {"name": "inter_event_time.png", "type": "inter_event", "column": timestamp_col, "title": "Интервалы между событиями"},
+                {"name": "case_duration.png", "type": "case_duration", "column": timestamp_col, "title": "Продолжительность кейсов"}
+            ]
 
         results = []
         
@@ -175,6 +218,8 @@ class VisualizationAgent:
             }, indent=2, ensure_ascii=False)
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             cols = list(df.columns) if hasattr(df, 'columns') else "N/A"
             return json.dumps({"error": f"Visualization failed: {e}. Columns: {cols}"}, ensure_ascii=False)
 
