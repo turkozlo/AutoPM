@@ -34,14 +34,29 @@ pip install -r requirements.txt
 ```
 
 ### 2. Конфигурация
-Создайте `config.json` в корне проекта:
-```json
-{
-    "api_key_LANGCHAIN_mistral": "ВАШ_API_КЛЮЧ",
-    "model_LANGCHAIN_mistral": "mistral-small-latest",
-    "llm_backend": 2
-}
+Скопируйте пример конфигурации и настройте его:
+```bash
+cp config.example.yaml config.yaml
 ```
+
+Отредактируйте `config.yaml`:
+```yaml
+# Провайдер: "mistral" (облако) или "local" (локальная модель)
+provider: "mistral"
+
+# Настройки Mistral Cloud
+mistral:
+  api_key: "ВАШ_API_КЛЮЧ"
+  model: "mistral-small-latest"
+
+# Настройки локальной модели (Ollama, LM Studio, vLLM)
+local:
+  base_url: "http://localhost:11434/v1"
+  model: "llama3.2"
+  api_key: "ollama"
+```
+
+> **💡 Локальные модели**: Установите `provider: "local"` и укажите адрес вашего сервера (Ollama, LM Studio и др.).
 
 ### 3. Запуск
 ```bash

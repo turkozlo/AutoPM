@@ -1,0 +1,14 @@
+# Model provider: "mistral" (cloud) or "local" (OpenAI-compatible API)
+provider: "mistral"
+
+# Mistral Cloud Settings (used when provider: "mistral")
+mistral:
+  api_key: "your-mistral-api-key"
+  model: "mistral-small-latest"
+
+# Local Model Settings (used when provider: "local")
+# Works with Ollama, LM Studio, vLLM, or any OpenAI-compatible API
+local:
+  base_url: "http://localhost:11434/v1"  # Ollama default
+  model: "llama3.2"
+  api_key: "ollama"  # Some servers require a dummy key

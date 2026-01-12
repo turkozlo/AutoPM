@@ -18,3 +18,4 @@ reports/
 .vscode/
 .antigravity/
 .gemini/
+config.yaml

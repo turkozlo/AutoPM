@@ -1,14 +1,28 @@
 from langchain_mistralai import ChatMistralAI
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
-from .config import MISTRAL_MODEL, MISTRAL_API_KEY
+from .config import (
+    PROVIDER,
+    MISTRAL_MODEL, MISTRAL_API_KEY,
+    LOCAL_BASE_URL, LOCAL_MODEL, LOCAL_API_KEY
+)
 
 class LLMClient:
     def __init__(self):
-        self.client = ChatMistralAI(
-            model=MISTRAL_MODEL,
-            api_key=MISTRAL_API_KEY,
-            temperature=0.2
-        )
+        if PROVIDER == "local":
+            self.client = ChatOpenAI(
+                base_url=LOCAL_BASE_URL,
+                model=LOCAL_MODEL,
+                api_key=LOCAL_API_KEY,
+                temperature=0.2
+            )
+        else:
+            self.client = ChatMistralAI(
+                model=MISTRAL_MODEL,
+                api_key=MISTRAL_API_KEY,
+                temperature=0.2
+            )
+
 
     def generate_response(self, prompt: str, system_prompt: str = "Ты полезный ИИ-ассистент.", json_mode: bool = False) -> str:
         """
