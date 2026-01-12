@@ -1,16 +1,49 @@
 from langchain_mistralai import ChatMistralAI
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from openai import OpenAI
 from .config import (
     PROVIDER,
     MISTRAL_MODEL, MISTRAL_API_KEY,
     LOCAL_BASE_URL, LOCAL_MODEL, LOCAL_API_KEY
 )
 
+
+class LocalLLMClient:
+    """Wrapper for native OpenAI client to match langchain interface."""
+    
+    def __init__(self, base_url: str, model: str, api_key: str, temperature: float = 0.2):
+        self.client = OpenAI(base_url=base_url, api_key=api_key)
+        self.model = model
+        self.temperature = temperature
+    
+    def invoke(self, messages: list) -> 'LocalLLMResponse':
+        """Invoke the local LLM with langchain-style messages."""
+        formatted_messages = []
+        for msg in messages:
+            if hasattr(msg, 'content'):
+                role = "system" if isinstance(msg, SystemMessage) else "user"
+                formatted_messages.append({"role": role, "content": msg.content})
+            else:
+                formatted_messages.append(msg)
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=formatted_messages,
+            temperature=self.temperature
+        )
+        return LocalLLMResponse(response.choices[0].message.content)
+
+
+class LocalLLMResponse:
+    """Simple response wrapper to match langchain response interface."""
+    def __init__(self, content: str):
+        self.content = content
+
+
 class LLMClient:
     def __init__(self):
         if PROVIDER == "local":
-            self.client = ChatOpenAI(
+            self.client = LocalLLMClient(
                 base_url=LOCAL_BASE_URL,
                 model=LOCAL_MODEL,
                 api_key=LOCAL_API_KEY,
@@ -22,7 +55,6 @@ class LLMClient:
                 api_key=MISTRAL_API_KEY,
                 temperature=0.2
             )
-
 
     def generate_response(self, prompt: str, system_prompt: str = "Ты полезный ИИ-ассистент.", json_mode: bool = False) -> str:
         """
