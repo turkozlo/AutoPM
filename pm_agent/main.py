@@ -4,6 +4,7 @@ import json
 import pandas as pd
 import os
 import datetime
+import time
 from pathlib import Path
 
 # Add project root to path
@@ -26,6 +27,44 @@ from pm_agent.agents.report import ReportAgent
 from pm_agent.chat_tools import get_tools_description, execute_tool, CHAT_TOOLS
 from pm_agent.safe_executor import execute_pandas_code, get_df_info_for_llm
 import glob
+
+
+def safe_input(prompt: str = "") -> str:
+    """
+    Safely read user input with Unicode error handling.
+    Handles UnicodeDecodeError that can occur when special keys (like backspace)
+    produce invalid UTF-8 byte sequences in certain terminal environments.
+    Invalid bytes are automatically filtered out without requiring re-entry.
+    """
+    try:
+        # Read raw bytes from stdin to handle potential encoding issues
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        
+        if hasattr(sys.stdin, 'buffer'):
+            # Read raw bytes and decode with error handling
+            raw_bytes = sys.stdin.buffer.readline()
+            # Decode with 'ignore' to silently drop invalid bytes
+            user_input = raw_bytes.decode('utf-8', errors='ignore').rstrip('\n\r')
+        else:
+            # Fallback for environments without buffer access
+            user_input = input()
+        
+        return user_input.strip()
+    except EOFError:
+        # Handle Ctrl+D
+        return "exit"
+    except KeyboardInterrupt:
+        # Handle Ctrl+C
+        print()
+        return "exit"
+    except Exception:
+        # Ultimate fallback - try standard input with replace error handling
+        try:
+            return input().encode('utf-8', errors='replace').decode('utf-8').strip()
+        except:
+            return ""
+
 
 def find_latest_session(base_filename: str) -> str | None:
     """Finds the latest session directory for the given filename."""
@@ -99,6 +138,7 @@ def run_tool_wrapper(tool_name: str, agent_func, llm: LLMClient, **kwargs):
     return result_str
 
 def main():
+    start_time = time.time()
     parser = argparse.ArgumentParser(description="Process Mining AI Agent (ReAct)")
     parser.add_argument("--file", type=str, required=True, help="Path to the log file (CSV)")
     args = parser.parse_args()
@@ -129,7 +169,7 @@ def main():
     
     if latest_session:
         print(f"\n🔍 Найдена предыдущая сессия: {latest_session}")
-        choice = input("Возобновить работу с ней? (y/n): ").strip().lower()
+        choice = safe_input("Возобновить работу с ней? (y/n): ").lower()
         if choice == 'y':
             resume_mode = True
             output_dir = latest_session
@@ -361,7 +401,14 @@ def main():
                 else:
                     print("⛔ Все попытки исчерпаны.")
 
-    if global_passed:        
+    if global_passed:
+        # Calculate and print total time
+        total_time = time.time() - start_time
+        minutes = int(total_time // 60)
+        seconds = int(total_time % 60)
+        time_str = f"{minutes} мин {seconds} сек" if minutes > 0 else f"{seconds} сек"
+        print(f"\n⏱️ Общее время выполнения: {time_str}")
+
         # --- Interactive QA Mode ---
         print("\n=========================================")
         print("💬 РЕЖИМ КОНСУЛЬТАЦИИ")
@@ -374,7 +421,7 @@ def main():
         
         while True:
             try:
-                user_input = input("\n👤 Ваш вопрос: ").strip()
+                user_input = safe_input("\n👤 Ваш вопрос: ")
                 if user_input.lower() in ['exit', 'quit', 'выход']:
                     print("🏁 Завершение работы. До свидания!")
                     break
