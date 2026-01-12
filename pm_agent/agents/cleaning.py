@@ -7,7 +7,7 @@ class DataCleaningAgent:
         self.df = df
         self.llm = llm_client
 
-    def run(self, profiling_report: Dict[str, Any]) -> str:
+    def run(self, profiling_report: Dict[str, Any], feedback: str = "") -> str:
         """
         Analyzes profiling report, asks LLM for cleaning plan, executes it, 
         and returns strict cleaning_result.json.
@@ -43,6 +43,9 @@ class DataCleaningAgent:
             }, ensure_ascii=False)
 
         prompt = f"Data Profile (Issues only):\n{json.dumps(issues, indent=2)}\nDuplicates: {duplicates}"
+        if feedback:
+            prompt += f"\n\nПРОШЛАЯ ПОПЫТКА БЫЛА ОТКЛОНЕНА СУДЬЕЙ: {feedback}\n\nСгенерируй ИСПРАВЛЕННЫЙ план (например, если удалено слишком много строк, используй fill_ вместо drop)."
+        
         plan_str = self.llm.generate_response(prompt, system_prompt)
         
         # 2. Parse Plan
@@ -149,15 +152,59 @@ class DataCleaningAgent:
             f"Доказательства: итоговое количество строк {final_rows} подтверждено методом len(df) после выполнения всех операций."
         )
 
+        # --- Outlier Removal (IQR Method, <5% threshold) ---
+        outlier_report = []
+        numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+        
+        for col in numeric_cols:
+            if col.lower() in ['id', 'case_id', 'global_id', 'row_id']:  # Skip ID columns
+                continue
+            
+            Q1 = df[col].quantile(0.25)
+            Q3 = df[col].quantile(0.75)
+            IQR = Q3 - Q1
+            
+            if IQR == 0:  # No spread, skip
+                continue
+                
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+            
+            outlier_mask = (df[col] < lower_bound) | (df[col] > upper_bound)
+            outlier_count = outlier_mask.sum()
+            outlier_ratio = outlier_count / len(df) if len(df) > 0 else 0
+            
+            if outlier_count > 0 and outlier_ratio < 0.05:  # Less than 5%
+                df = df[~outlier_mask]
+                outlier_report.append({
+                    "column": col,
+                    "outliers_removed": int(outlier_count),
+                    "percentage": round(outlier_ratio * 100, 2)
+                })
+                if "Outlier Removal (IQR)" not in applied_funcs:
+                    applied_funcs.append("Outlier Removal (IQR)")
+            elif outlier_count > 0:
+                outlier_report.append({
+                    "column": col,
+                    "outliers_detected": int(outlier_count),
+                    "percentage": round(outlier_ratio * 100, 2),
+                    "action": "KEPT (>5% of data)"
+                })
+
+        final_rows_after_outliers = len(df)
+        total_outliers_removed = sum([r.get('outliers_removed', 0) for r in outlier_report])
+
         result = {
             "rows_before": initial_rows,
-            "rows_after": final_rows,
-            "rows_removed": rows_removed,
+            "rows_after": final_rows_after_outliers,
+            "rows_removed": initial_rows - final_rows_after_outliers,
             "rows_filled": len(fill_actions),
             "removed_by_column": removed_by_column,
             "duplicates_removed": duplicates_removed,
+            "outliers_removed": total_outliers_removed,
+            "outlier_report": outlier_report,
             "fill_actions": fill_actions,
-            "thoughts": cleaning_summary,
+            "thoughts": cleaning_summary + f" Outliers: {total_outliers_removed} removed (IQR method, <5% rule).",
             "applied_functions": applied_funcs
         }
 

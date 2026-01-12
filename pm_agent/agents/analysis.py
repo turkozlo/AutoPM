@@ -21,7 +21,7 @@ class ProcessAnalysisAgent:
         else:
             return seconds / 86400, "дн."
 
-    def run(self, pm_columns: Dict[str, str], output_dir: str = ".") -> str:
+    def run(self, pm_columns: Dict[str, str], output_dir: str = ".", feedback: str = "") -> str:
         """
         Analyzes process performance and returns strict analysis_result.json.
         """

@@ -9,7 +9,7 @@ class ProcessDiscoveryAgent:
         self.df = df
         self.llm = llm_client
 
-    def run(self, pm_columns: Dict[str, str] = None, output_dir: str = ".") -> str:
+    def run(self, pm_columns: Dict[str, str] = None, output_dir: str = ".", feedback: str = "") -> str:
         """
         Discovers process model and returns strict discovery_result.json.
         """
@@ -41,6 +41,8 @@ class ProcessDiscoveryAgent:
                 '{"case_id": "ColName", "activity": "ColName", "timestamp": "ColName"}'
             )
             prompt = f"Columns: {df.columns.tolist()}\nHead:\n{df.head(3).to_string()}"
+            if feedback:
+                prompt += f"\n\nКРИТИКА СУДЬИ (ИСПРАВЬ ОШИБКИ): {feedback}"
             
             resp = self.llm.generate_response(prompt, system_prompt)
             try:
