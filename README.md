@@ -58,19 +58,19 @@ python pm_agent/main.py --file "data/logs.csv"
 
 ```mermaid
 graph TD
-    User[User Question] --> Router{Smart Router}
-    Router -->|Simple Query| Tools[Standard Tools (Pandas Wrappers)]
-    Router -->|Complex Logic| CodeGen[Code Interpreter]
+    User["User Question"] --> Router{"Smart Router"}
+    Router -->|Simple Query| Tools["Standard Tools (Pandas Wrappers)"]
+    Router -->|Complex Logic| CodeGen["Code Interpreter"]
     
-    Tools --> Validator{Judge}
+    Tools --> Validator{"Judge"}
     CodeGen --> Validator
     
-    Validator -->|Success| Answer[Final Answer]
-    Validator -->|Partial| AnswerWarning[Answer + Warning]
-    Validator -->|Fail| Retry[Retry Loop]
+    Validator -->|Success| Answer["Final Answer"]
+    Validator -->|Partial| AnswerWarning["Answer + Warning"]
+    Validator -->|Fail| Retry["Retry Loop"]
     
-    Hash[(Memory)] -.-> CodeGen
-    Knowledge[(Knowledge Base)] -.-> CodeGen
+    Hash[("Memory")] -.-> CodeGen
+    Knowledge[("Knowledge Base")] -.-> CodeGen
 ```
 
 ### Компоненты
