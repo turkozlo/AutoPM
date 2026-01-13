@@ -14,7 +14,13 @@ class RAGManager:
         """
         self.model_path = local_model_path or model_name
         print(f"Loading embedding model from: {self.model_path}...")
-        self.model = SentenceTransformer(self.model_path)
+        
+        # Auto-detect device (GPU/CPU)
+        import torch
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using device: {self.device}")
+        
+        self.model = SentenceTransformer(self.model_path, device=self.device)
         self.index = None
         self.documents = []
         self.metadata = []
