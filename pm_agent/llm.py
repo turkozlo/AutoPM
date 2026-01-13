@@ -139,24 +139,27 @@ class LLMClient:
         except:
             return {"passed": True, "critique": "Ошибка парсинга ответа Судьи.", "score": 5}
 
-    def judge_session(self, memory: str, final_report: str) -> dict:
+    def judge_cumulative_progress(self, memory: str, artifacts_count: int, final_report: str = "") -> dict:
         """
-        Evaluates the entire session based on Memory and Final Report.
-        Returns {'passed': bool, 'critique': str, 'suggested_start_point': str}
+        Evaluates the cumulative progress of the session so far.
+        Returns {'passed': bool, 'critique': str}
         """
         system_prompt = (
-            "Ты — Главный Судья (Global Judge). Твоя задача — оценить УСПЕХ всей сессии Process Mining.\n"
+            "Ты — Главный Судья (Cumulative Judge). Твоя задача — оценивать, идет ли процесс Process Mining в правильном направлении после каждого шага.\n"
             "ПРАВИЛА:\n"
-            "1. Изучи 'Long-Term Memory' (историю шагов) и 'Final Report'.\n"
-            "2. КРИТЕРИИ УСПЕХА:\n"
-            "   - Пройдены ли шаги: Profiling, Cleaning, Discovery, Visualization, Analysis?\n"
-            "   - Есть ли финальный отчет?\n"
-            "   - Есть ли ссылки на графики (визуализацию)?\n"
-            "3. Если все хорошо — верни passed=True.\n"
-            "4. Если есть КРИТИЧЕСКИЕ пробелы (например, не построены графики, или отчет пустой) — верни passed=False и КРИТИКУ.\n"
-            "5. Верни JSON: {'passed': bool, 'critique': str, 'suggested_start_point': str (с чего начать исправление?)}\n"
+            "1. Изучи 'Long-Term Memory' (историю шагов) и количество созданных артефактов.\n"
+            "2. КРИТЕРИИ ОЦЕНКИ:\n"
+            "   - Агент следует логической цепочке? (Profiling -> Cleaning -> Discovery/Visualization -> Analysis -> Reporting).\n"
+            "   - Если были ошибки, пытается ли агент их исправить, или ходит по кругу?\n"
+            "   - Если уже есть Reporting, есть ли финальный отчет и ссылки на графики?\n"
+            "3. Решение о ПЕРЕЗАПУСКЕ:\n"
+            "   - Если агент безнадежно застрял (повторяет один и тот же ошибочный шаг более 3 раз без прогресса).\n"
+            "   - Если логика процесса нарушена (например, анализ начат без очистки данных).\n"
+            "   - Если финальный отчет пустой или не содержит выводов.\n"
+            "   В таких случаях верни passed=False, что вызовет ПОЛНЫЙ ПЕРЕЗАПУСК сессии.\n"
+            "4. Верни JSON: {'passed': bool, 'critique': str}"
         )
-        prompt = f"Long-Term Memory:\n{memory}\n\nFinal Report:\n{final_report}"
+        prompt = f"Long-Term Memory:\n{memory}\n\nArtifacts Count: {artifacts_count}\n\nFinal Report (if any):\n{final_report}"
         
         response = self.generate_response(prompt, system_prompt)
         
@@ -166,9 +169,9 @@ class LLMClient:
             end = response.rfind('}') + 1
             if start != -1 and end != -1:
                 return json.loads(response[start:end])
-            return {"passed": True, "critique": "Parsing error", "suggested_start_point": ""}
+            return {"passed": True, "critique": "Parsing error"}
         except:
-             return {"passed": True, "critique": "Parsing error", "suggested_start_point": ""}
+             return {"passed": True, "critique": "Parsing error"}
 
 
     def reflect_on_result(self, context: str, result: str) -> dict:

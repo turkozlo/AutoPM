@@ -387,27 +387,33 @@ def main():
                 with open(os.path.join(output_dir, "memory.md"), "w", encoding="utf-8") as f:
                     f.write(memory)
                     
+                # 4. Global Cumulative Step Evaluation
+                print("\n⚖️ ГЛОБАЛЬНАЯ ОЦЕНКА ПРОГРЕССА СЕССИИ...")
+                judge_verdict = llm.judge_cumulative_progress(memory, len(artifacts), final_report_content)
+                global_passed = judge_verdict.get("passed", False)
+                critique = judge_verdict.get("critique", "Нет замечаний")
+                
+                if not global_passed:
+                    print(f"❌ ПРОГРЕСС СЕССИИ ПРИЗНАН НЕУСПЕШНЫМ. Критика: {critique}")
+                    if session_attempt < MAX_SESSION_RETRIES:
+                        print("🔄 ПЕРЕЗАПУСК СЕССИИ С УЧЕТОМ КРИТИКИ...")
+                        # Inject critique into memory for next run
+                        memory = f"Previous Session Failed.\nCritique: {critique}\nRestarting process...\nData loaded."
+                        current_df = df.copy() # Reset DF
+                        artifacts = {} # Reset artifacts
+                        # Break out of step loop to restart session
+                        break
+                    else:
+                        print("⛔ Все попытки сессии исчерпаны.")
+                        # Even if failed, we break to exit the analysis phase
+                        break
+                else:
+                    print("✅ Прогресс сессии одобрен Судьей.")
+
                 if step_count >= MAX_STEPS:
                     print("⚠️ Достигнут лимит шагов агента внутри сессии.")
-
-            # --- End of Agent Loop, Start Global Eval ---
-            print("\n⚖️ ГЛОБАЛЬНАЯ ОЦЕНКА СЕССИИ...")
-            judge_verdict = llm.judge_session(memory, final_report_content)
-            global_passed = judge_verdict.get("passed", False)
-            critique = judge_verdict.get("critique", "Нет замечаний")
-            
-            if global_passed:
-                print("✅ СЕССИЯ УСПЕШНА! Судья доволен.")
-            else:
-                print(f"❌ СЕССИЯ ПРОВАЛЕНА. Критика: {critique}")
-                if session_attempt < MAX_SESSION_RETRIES:
-                    print("🔄 ПЕРЕЗАПУСК СЕССИИ С УЧЕТОМ КРИТИКИ...")
-                    # Inject critique into memory for next run
-                    memory = f"Previous Session Failed.\nCritique: {critique}\nRestarting process...\nData loaded."
-                    current_df = df.copy() # Reset DF
-                    artifacts = {} # Reset artifacts
-                else:
-                    print("⛔ Все попытки исчерпаны.")
+                    global_passed = True # Allow moving to chat if we hit step limit but judge was ok with progress so far
+                    break
 
     if global_passed:
         # Calculate and print total time
