@@ -25,8 +25,8 @@ from pm_agent.agents.discovery import ProcessDiscoveryAgent
 from pm_agent.agents.analysis import ProcessAnalysisAgent
 from pm_agent.agents.report import ReportAgent
 from pm_agent.chat_tools import get_tools_description, execute_tool, CHAT_TOOLS
-from pm_agent.safe_executor import execute_pandas_code, get_df_info_for_llm
-from pm_agent.rag import RAFManager
+from pm_agent.safe_executor import execute_pandas_code, get_df_info_for_llm, validate_code_syntax
+from pm_agent.rag import RAGManager
 import glob
 
 

@@ -63,3 +63,6 @@ urllib3==2.6.2
 uuid_utils==0.12.0
 wheel==0.45.1
 zstandard==0.25.0
+faiss-cpu==1.13.2
+sentence-transformers==4.41.0
+openpyxl==3.1.5
