@@ -30,8 +30,8 @@ class ProcessDiscoveryAgent:
             df.columns = new_cols
 
         # 0.5 Drop existing pm4py columns IMMEDIATELY to avoid any conflicts
-        pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
-        df = df.drop(columns=[c for c in pm4py_cols if c in df.columns])
+        # pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
+        # df = df.drop(columns=[c for c in pm4py_cols if c in df.columns])
 
         # 1. Identify Columns (if needed)
         if not pm_columns:
@@ -280,6 +280,10 @@ class ProcessDiscoveryAgent:
             top_start = max(start_activities.items(), key=lambda x: x[1])[0] if start_activities else "N/A"
             top_end = max(end_activities.items(), key=lambda x: x[1])[0] if end_activities else "N/A"
 
+            # Transition highlights for the thoughts section
+            top_3_list = [f"{t['from']} -> {t['to']} ({t['count']})" for t in transitions[:3]]
+            top_3_str = ", ".join(top_3_list)
+
             result = {
                 "pm_columns": pm_columns,
                 "activities": num_activities,
@@ -292,7 +296,7 @@ class ProcessDiscoveryAgent:
                 "image_dfg": abs_dfg_path,
                 "thoughts": f"Процесс успешно восстановлен. ОБЩАЯ СТАТИСТИКА: Обнаружено {num_activities} активностей, {num_edges} уникальных переходов (всего {total_transitions_count} событий перехода) и {len(loops)} циклов (петель). "
                             f"КЛЮЧЕВЫЕ ТОЧКИ: Основная стартовая активность - '{top_start}', основная конечная - '{top_end}'. "
-                            f"УЗКИЕ МЕСТА (Bottlenecks): Наиболее частые переходы: {', '.join([f'{t['from']} -> {t['to']} ({t['count']})' for t in transitions[:3]])}. "
+                            f"УЗКИЕ МЕСТА (Bottlenecks): Наиболее частые переходы: {top_3_str}. "
                             f"ДОКАЗАТЕЛЬСТВА: Сгенерирована схема Mermaid (см. ниже) и файл [process_discovery_dfg.png]({abs_dfg_path}). Расчеты выполнены через pm4py.discover_dfg().\n\n"
                             f"```mermaid\n{mermaid_code}\n```",
                 "applied_functions": ["pm4py.discover_dfg()", "pm4py.save_vis_dfg()", "mermaid_generation"]

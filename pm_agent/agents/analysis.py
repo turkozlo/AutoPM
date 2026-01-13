@@ -49,8 +49,8 @@ class ProcessAnalysisAgent:
             df.columns = new_cols
 
         # 0.5 Drop existing pm4py columns IMMEDIATELY to avoid any conflicts
-        pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
-        df = df.drop(columns=[c for c in pm4py_cols if c in df.columns])
+        # pm4py_cols = ['case:concept:name', 'concept:name', 'time:timestamp']
+        # df = df.drop(columns=[c for c in pm4py_cols if c in df.columns])
         # Normalize keys and handle variations
         def get_col(keys, d):
             for k in keys:
@@ -240,9 +240,16 @@ class ProcessAnalysisAgent:
             p95_str = f"{duration_stats['p95']['value']} {duration_stats['p95']['unit']}" if duration_stats else "N/A"
             median_str = f"{duration_stats['median']['value']} {duration_stats['median']['unit']}" if duration_stats else "N/A"
             
+            # Bottleneck highlights for the summary
+            if bottlenecks:
+               b_list = [f"{b['activity']} ({b['mean_duration']} {b['unit']})" for b in bottlenecks[:3]]
+               b_str = ", ".join(b_list)
+            else:
+               b_str = "не обнаружены"
+            
             perf_summary = (
                 f"АНАЛИЗ ПРОИЗВОДИТЕЛЬНОСТИ: Среднее время выполнения кейса составляет {mean_str}, медиана {median_str}, при этом 95% кейсов завершаются в пределах {p95_str}. "
-                f"УЗКИЕ МЕСТА (Bottlenecks): Наибольшие задержки наблюдаются в операциях: {', '.join([f'{b['activity']} ({b['mean_duration']} {b['unit']})' for b in bottlenecks[:3]]) if bottlenecks else 'не обнаружены'}. "
+                f"УЗКИЕ МЕСТА (Bottlenecks): Наибольшие задержки наблюдаются в операциях: {b_str}. "
                 f"ЦИКЛЫ: Обнаружено {len(loops)} повторных операций, что может указывать на неэффективность. "
                 f"ПЕРИОД: Анализ охватывает {time_range_days} дн. "
                 f"ДОКАЗАТЕЛЬСТВА: Расчеты выполнены через pm4py.get_all_case_durations(). {f'Визуализация производительности сохранена в [process_performance_dfg.png]({abs_perf_dfg_path}).' if abs_perf_dfg_path else ''}"
