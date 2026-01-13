@@ -6,7 +6,8 @@ import pandas as pd
 import numpy as np
 import signal
 import sys
-from typing import Dict, Any
+import ast
+from typing import Dict, Any, Optional
 
 
 class TimeoutError(Exception):
@@ -15,6 +16,23 @@ class TimeoutError(Exception):
 
 def timeout_handler(signum, frame):
     raise TimeoutError("Code execution timed out (5 seconds)")
+
+
+def validate_code_syntax(code: str) -> Dict[str, Any]:
+    """
+    Checks code for syntax errors without executing it.
+    Returns {"success": True} or {"success": False, "error": "..."}.
+    """
+    try:
+        ast.parse(code)
+        return {"success": True}
+    except SyntaxError as e:
+        return {
+            "success": False,
+            "error": f"Синтаксическая ошибка: {e.msg} (строка {e.lineno}, столбец {e.offset})"
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Ошибка валидации: {e}"}
 
 
 def execute_pandas_code(code: str, df: pd.DataFrame, timeout_seconds: int = 5) -> Dict[str, Any]:

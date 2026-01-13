@@ -25,7 +25,7 @@ from pm_agent.agents.discovery import ProcessDiscoveryAgent
 from pm_agent.agents.analysis import ProcessAnalysisAgent
 from pm_agent.agents.report import ReportAgent
 from pm_agent.chat_tools import get_tools_description, execute_tool, CHAT_TOOLS
-from pm_agent.safe_executor import execute_pandas_code, get_df_info_for_llm
+from pm_agent.safe_executor import execute_pandas_code, get_df_info_for_llm, validate_code_syntax
 import glob
 
 
@@ -538,7 +538,24 @@ def main():
                             print(f"💭 Мысль: {thought}")
                             print(f"📝 Код:\n```python\n{code}\n```")
                             
-                            # Execute code
+                            # 1. Validate Code Syntax
+                            validation = validate_code_syntax(code)
+                            if not validation["success"]:
+                                print(f"⚠️ Найдена синтаксическая ошибка: {validation['error']}")
+                                previous_error = validation["error"]
+                                if attempt == MAX_CODE_ATTEMPTS - 1:
+                                    answer_text = f"Не удалось сгенерировать корректный код. Ошибка: {previous_error}"
+                                continue
+
+                            # 2. User Confirmation
+                            print("\n⚠️ ВНИМАНИЕ: Агент сгенерировал код для выполнения.")
+                            confirm = safe_input("Нажмите Enter для выполнения или любой текст для отмены: ")
+                            if confirm:
+                                print("🚫 Выполнение отменено пользователем.")
+                                answer_text = "Выполнение кода было отменено пользователем."
+                                break
+
+                            # 3. Execute code
                             exec_result = execute_pandas_code(code, current_df)
                             
                             if exec_result["success"]:
