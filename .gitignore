@@ -12,6 +12,7 @@ config.json
 reports/
 *.csv
 !morning_routine_structured.csv # Keep the example data if desired, or ignore all
+processes.xlsx
 
 # IDEs
 .idea/
