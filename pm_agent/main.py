@@ -26,6 +26,7 @@ from pm_agent.agents.analysis import ProcessAnalysisAgent
 from pm_agent.agents.report import ReportAgent
 from pm_agent.chat_tools import get_tools_description, execute_tool, CHAT_TOOLS
 from pm_agent.safe_executor import execute_pandas_code, get_df_info_for_llm
+from pm_agent.rag import RAGManager
 import glob
 
 
@@ -141,6 +142,7 @@ def main():
     start_time = time.time()
     parser = argparse.ArgumentParser(description="Process Mining AI Agent (ReAct)")
     parser.add_argument("--file", type=str, required=True, help="Path to the log file (CSV)")
+    parser.add_argument("--rag-file", type=str, help="Path to the Excel file for RAG (optional)")
     args = parser.parse_args()
 
     # Setup Output
@@ -151,8 +153,14 @@ def main():
     resume_mode = False
     output_dir = ""
     
+    # Init RAG
+    rag_manager = None
+    if args.rag_file:
+        rag_manager = RAGManager()
+        rag_manager.load_excel(args.rag_file)
+
     # Init Core
-    llm = LLMClient()
+    llm = LLMClient(rag_manager=rag_manager)
     artifacts = {}
     memory = ""
     current_df = None

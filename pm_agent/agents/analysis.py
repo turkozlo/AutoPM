@@ -25,6 +25,13 @@ class ProcessAnalysisAgent:
         """
         Analyzes process performance and returns strict analysis_result.json.
         """
+        # Query RAG for context if available
+        rag_context = ""
+        if hasattr(self.llm, 'rag_manager') and self.llm.rag_manager:
+            # We can query by process name if we find it in the data, 
+            # or just a general query about "process analysis"
+            rag_context = self.llm.rag_manager.get_context_string("process analysis performance bottlenecks")
+
         df = self.df.copy() # Isolate
         self.df_orig = df.copy() # For debugging
         

@@ -41,7 +41,8 @@ class LocalLLMResponse:
 
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, rag_manager=None):
+        self.rag_manager = rag_manager
         if PROVIDER == "local":
             self.client = LocalLLMClient(
                 base_url=LOCAL_BASE_URL,
@@ -264,6 +265,11 @@ class LLMClient:
             f"USER QUESTION:\n{question}\n"
         )
         
+        # Inject RAG context if available
+        if self.rag_manager:
+            rag_context = self.rag_manager.get_context_string(question)
+            user_prompt = rag_context + "\n\n" + user_prompt
+
         response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
         # Clean markdown if present
         cleaned_str = response_str.strip().replace("```json", "").replace("```", "").strip()
