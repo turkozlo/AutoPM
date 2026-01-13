@@ -20,3 +20,7 @@ processes.xlsx
 .antigravity/
 .gemini/
 config.yaml
+
+# Models
+*.safetensors
+

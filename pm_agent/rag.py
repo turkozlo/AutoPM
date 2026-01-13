@@ -12,6 +12,11 @@ class RAGManager:
         :param model_name: Name of the SentenceTransformer model.
         :param local_model_path: Path to the locally saved model (for offline use).
         """
+        # Default local path
+        default_local = os.path.join("models", model_name)
+        if not local_model_path and os.path.exists(default_local):
+            local_model_path = default_local
+            
         self.model_path = local_model_path or model_name
         print(f"Loading embedding model from: {self.model_path}...")
         
