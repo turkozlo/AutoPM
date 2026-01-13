@@ -139,27 +139,26 @@ class LLMClient:
         except:
             return {"passed": True, "critique": "Ошибка парсинга ответа Судьи.", "score": 5}
 
-    def judge_cumulative_progress(self, memory: str, artifacts_count: int, final_report: str = "") -> dict:
+    def judge_cumulative_progress(self, memory: str, artifacts_count: int, cumulative_context: str = "") -> dict:
         """
-        Evaluates the cumulative progress of the session so far.
+        Evaluates the cumulative progress of the session so far using full step outputs.
         Returns {'passed': bool, 'critique': str}
         """
         system_prompt = (
-            "Ты — Главный Судья (Cumulative Judge). Твоя задача — оценивать, идет ли процесс Process Mining в правильном направлении после каждого шага.\n"
+            "Ты — Главный Судья (Cumulative Judge). Твоя задача — оценивать, идет ли процесс Process Mining в правильном направлении.\n"
             "ПРАВИЛА:\n"
-            "1. Изучи 'Long-Term Memory' (историю шагов) и количество созданных артефактов.\n"
+            "1. Изучи 'Cumulative Context' (полные результаты всех шагов) и количество созданных артефактов.\n"
             "2. КРИТЕРИИ ОЦЕНКИ:\n"
             "   - Агент следует логической цепочке? (Profiling -> Cleaning -> Discovery/Visualization -> Analysis -> Reporting).\n"
-            "   - Если были ошибки, пытается ли агент их исправить, или ходит по кругу?\n"
-            "   - Если уже есть Reporting, есть ли финальный отчет и ссылки на графики?\n"
-            "3. Решение о ПЕРЕЗАПУСКЕ:\n"
-            "   - Если агент безнадежно застрял (повторяет один и тот же ошибочный шаг более 3 раз без прогресса).\n"
-            "   - Если логика процесса нарушена (например, анализ начат без очистки данных).\n"
-            "   - Если финальный отчет пустой или не содержит выводов.\n"
-            "   В таких случаях верни passed=False, что вызовет ПОЛНЫЙ ПЕРЕЗАПУСК сессии.\n"
+            "   - Если были ошибки, пытается ли агент их реально исправить (видно по изменениям в результатах), или просто повторяет команды?\n"
+            "   - Оцени качество КАЖДОГО инструмента. Например, если Discovery вернул пустую схему, а Cleaning был пропущен — это повод для перезапуска.\n"
+            "3. Решение о ПЕРЕЗАПУСКЕ (passed=False):\n"
+            "   - Если агент безнадежно застрял (одни и те же ошибки в результатах).\n"
+            "   - Если логика процесса критически нарушена.\n"
+            "   - Если результаты шагов выглядят фиктивными или пустыми (например, Reporting без данных).\n"
             "4. Верни JSON: {'passed': bool, 'critique': str}"
         )
-        prompt = f"Long-Term Memory:\n{memory}\n\nArtifacts Count: {artifacts_count}\n\nFinal Report (if any):\n{final_report}"
+        prompt = f"Long-Term Memory Summary:\n{memory}\n\nArtifacts Count: {artifacts_count}\n\nCUMULATIVE CONTEXT (Raw Outputs):\n{cumulative_context}"
         
         response = self.generate_response(prompt, system_prompt)
         

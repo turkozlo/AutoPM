@@ -282,6 +282,7 @@ def main():
             
             step_count = 0
             final_report_content = ""
+            cumulative_outputs = []
             
             while step_count < MAX_STEPS:
                 step_count += 1
@@ -373,6 +374,9 @@ def main():
                     else:
                          current_step_result_str = f"Error: Unknown tool '{tool_name}'"
                          print(f"❌ Неизвестный инструмент.")
+                    
+                    # Store raw output for cumulative judging
+                    cumulative_outputs.append(f"Step {step_count}: {tool_name}\nResult:\n{current_step_result_str}")
 
                 except Exception as e:
                     err_msg = f"Error executing {tool_name}: {e}"
@@ -389,7 +393,8 @@ def main():
                     
                 # 4. Global Cumulative Step Evaluation
                 print("\n⚖️ ГЛОБАЛЬНАЯ ОЦЕНКА ПРОГРЕССА СЕССИИ...")
-                judge_verdict = llm.judge_cumulative_progress(memory, len(artifacts), final_report_content)
+                cumulative_context = "\n---\n".join(cumulative_outputs)
+                judge_verdict = llm.judge_cumulative_progress(memory, len(artifacts), cumulative_context)
                 global_passed = judge_verdict.get("passed", False)
                 critique = judge_verdict.get("critique", "Нет замечаний")
                 
