@@ -19,3 +19,7 @@ reports/
 .antigravity/
 .gemini/
 config.yaml
+
+# Models
+*.safetensors
+
