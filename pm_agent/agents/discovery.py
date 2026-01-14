@@ -176,11 +176,11 @@ class ProcessDiscoveryAgent:
             dfg, start_acts, end_acts = pm4py.discover_dfg(formatted_df)
             
             # Save DFG as PNG for evidence
-            abs_dfg_path = None
+            rel_dfg_path = None
             try:
                 dfg_path = os.path.join(output_dir, "process_discovery_dfg.png")
                 pm4py.save_vis_dfg(dfg, start_acts, end_acts, dfg_path)
-                abs_dfg_path = os.path.abspath(dfg_path).replace("\\", "/")
+                rel_dfg_path = os.path.basename(dfg_path)
             except Exception as vis_e:
                 print(f"Warning: DFG visualization failed (likely missing Graphviz): {vis_e}")
                 # Fallback: Bar chart of top transitions
@@ -204,7 +204,7 @@ class ProcessDiscoveryAgent:
                     fallback_path = os.path.join(output_dir, "process_discovery_top_transitions.png")
                     plt.savefig(fallback_path)
                     plt.close()
-                    abs_dfg_path = os.path.abspath(fallback_path).replace("\\", "/")
+                    rel_dfg_path = os.path.basename(fallback_path)
                 except Exception as plt_e:
                     print(f"Fallback visualization failed: {plt_e}")
             
@@ -293,11 +293,11 @@ class ProcessDiscoveryAgent:
                 "top_transitions": transitions[:10],
                 "loops": loops,
                 "mermaid": mermaid_code,
-                "image_dfg": abs_dfg_path,
+                "image_dfg": rel_dfg_path,
                 "thoughts": f"Процесс успешно восстановлен. ОБЩАЯ СТАТИСТИКА: Обнаружено {num_activities} активностей, {num_edges} уникальных переходов (всего {total_transitions_count} событий перехода) и {len(loops)} циклов (петель). "
                             f"КЛЮЧЕВЫЕ ТОЧКИ: Основная стартовая активность - '{top_start}', основная конечная - '{top_end}'. "
                             f"УЗКИЕ МЕСТА (Bottlenecks): Наиболее частые переходы: {top_3_str}. "
-                            f"ДОКАЗАТЕЛЬСТВА: Сгенерирована схема Mermaid (см. ниже) и файл [process_discovery_dfg.png]({abs_dfg_path}). Расчеты выполнены через pm4py.discover_dfg().\n\n"
+                            f"ДОКАЗАТЕЛЬСТВА: Сгенерирована схема Mermaid (см. ниже) и файл [process_discovery_dfg.png]({rel_dfg_path}). Расчеты выполнены через pm4py.discover_dfg().\n\n"
                             f"```mermaid\n{mermaid_code}\n```",
                 "applied_functions": ["pm4py.discover_dfg()", "pm4py.save_vis_dfg()", "mermaid_generation"]
             }

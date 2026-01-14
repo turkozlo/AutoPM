@@ -187,12 +187,12 @@ class ProcessAnalysisAgent:
                         })
 
             # Performance DFG and PNG
-            abs_perf_dfg_path = None
+            rel_perf_dfg_path = None
             try:
                 perf_dfg, start_acts, end_acts = pm4py.discover_performance_dfg(formatted_df)
                 perf_dfg_path = os.path.join(output_dir, "process_performance_dfg.png")
                 pm4py.save_vis_performance_dfg(perf_dfg, start_acts, end_acts, perf_dfg_path)
-                abs_perf_dfg_path = os.path.abspath(perf_dfg_path).replace("\\", "/")
+                rel_perf_dfg_path = os.path.basename(perf_dfg_path)
             except Exception as vis_e:
                 print(f"Warning: Performance DFG visualization failed (likely missing Graphviz): {vis_e}")
                 # Fallback: Bar chart of bottlenecks
@@ -211,7 +211,7 @@ class ProcessAnalysisAgent:
                         fallback_path = os.path.join(output_dir, "process_performance_bottlenecks.png")
                         plt.savefig(fallback_path)
                         plt.close()
-                        abs_perf_dfg_path = os.path.abspath(fallback_path).replace("\\", "/")
+                        rel_perf_dfg_path = os.path.basename(fallback_path)
                 except Exception as plt_e:
                     print(f"Fallback visualization failed: {plt_e}")
 
@@ -252,7 +252,7 @@ class ProcessAnalysisAgent:
                 f"УЗКИЕ МЕСТА (Bottlenecks): Наибольшие задержки наблюдаются в операциях: {b_str}. "
                 f"ЦИКЛЫ: Обнаружено {len(loops)} повторных операций, что может указывать на неэффективность. "
                 f"ПЕРИОД: Анализ охватывает {time_range_days} дн. "
-                f"ДОКАЗАТЕЛЬСТВА: Расчеты выполнены через pm4py.get_all_case_durations(). {f'Визуализация производительности сохранена в [process_performance_dfg.png]({abs_perf_dfg_path}).' if abs_perf_dfg_path else ''}"
+                f"ДОКАЗАТЕЛЬСТВА: Расчеты выполнены через pm4py.get_all_case_durations(). {f'Визуализация производительности сохранена в [process_performance_dfg.png]({rel_perf_dfg_path}).' if rel_perf_dfg_path else ''}"
             )
 
             result = {
@@ -261,7 +261,7 @@ class ProcessAnalysisAgent:
                 "bottlenecks": bottlenecks,
                 "loops": loops,
                 "anomalies": anomalies,
-                "image_performance": abs_perf_dfg_path,
+                "image_performance": rel_perf_dfg_path,
                 "thoughts": perf_summary,
                 "applied_functions": ["pm4py.get_all_case_durations()", "pm4py.discover_performance_dfg()", "pm4py.save_vis_performance_dfg()", "df.groupby().diff()"]
             }

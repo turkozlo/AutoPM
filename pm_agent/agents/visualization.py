@@ -172,7 +172,7 @@ class VisualizationAgent:
                 plt.savefig(filepath)
                 plt.close()
                 
-                abs_path = os.path.abspath(filepath).replace("\\", "/")
+                rel_path = chart['name']
                 
                 # LLM Interpretation
                 stats_prompt = f"Chart: {chart['name']}\nData Summary: {json.dumps(data_summary, ensure_ascii=False)}"
@@ -189,7 +189,7 @@ class VisualizationAgent:
                 interpretation = self.llm.generate_response(stats_prompt, interp_system)
                 
                 results.append({
-                    "image": abs_path,
+                    "image": rel_path,
                     "type": ctype,
                     "column": col,
                     "data_summary": data_summary,
