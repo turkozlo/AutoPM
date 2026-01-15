@@ -1,5 +1,7 @@
 import unittest
+
 from pm_agent.safe_executor import validate_code_syntax
+
 
 class TestCodeValidation(unittest.TestCase):
     def test_valid_code(self):
@@ -31,6 +33,7 @@ return df.head()
         res = validate_code_syntax(code)
         self.assertFalse(res["success"])
         self.assertIn("Синтаксическая ошибка", res["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

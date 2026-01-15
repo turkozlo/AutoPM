@@ -1,6 +1,8 @@
-import pandas as pd
 import json
-from typing import Dict, Any
+from typing import Any, Dict
+
+import pandas as pd
+
 
 class DataCleaningAgent:
     def __init__(self, df: pd.DataFrame, llm_client):
@@ -9,10 +11,10 @@ class DataCleaningAgent:
 
     def run(self, profiling_report: Dict[str, Any], feedback: str = "") -> str:
         """
-        Analyzes profiling report, asks LLM for cleaning plan, executes it, 
+        Analyzes profiling report, asks LLM for cleaning plan, executes it,
         and returns strict cleaning_result.json.
         """
-        df = self.df.copy() # Isolate
+        df = self.df.copy()  # Isolate
         # 1. Ask LLM for plan based on Profile
         system_prompt = (
             "Ты — Data Cleaning Agent. Твоя задача — создать ПЛАН очистки данных на основе профиля данных (JSON). "
@@ -26,11 +28,11 @@ class DataCleaningAgent:
             "Пример ответа: "
             '[{"column": "ColName", "action": "fill_mean", "reason": "Заполнено средним для сохранения объема данных"}]'
         )
-        
+
         # Filter profile to only show columns with issues
         issues = {k: v for k, v in profiling_report['columns'].items() if v['nan'] > 0}
         duplicates = profiling_report.get('duplicates', 0)
-        
+
         if not issues and duplicates == 0:
             return json.dumps({
                 "rows_before": profiling_report['row_count'],
@@ -44,10 +46,14 @@ class DataCleaningAgent:
 
         prompt = f"Data Profile (Issues only):\n{json.dumps(issues, indent=2)}\nDuplicates: {duplicates}"
         if feedback:
-            prompt += f"\n\nПРОШЛАЯ ПОПЫТКА БЫЛА ОТКЛОНЕНА СУДЬЕЙ: {feedback}\n\nСгенерируй ИСПРАВЛЕННЫЙ план (например, если удалено слишком много строк, используй fill_ вместо drop)."
-        
+            prompt += (
+                f"\n\nПРОШЛАЯ ПОПЫТКА БЫЛА ОТКЛОНЕНА СУДЬЕЙ: {feedback}\n\n"
+                "Сгенерируй ИСПРАВЛЕННЫЙ план (например, если удалено слишком много строк, "
+                "используй fill_ вместо drop)."
+            )
+
         plan_str = self.llm.generate_response(prompt, system_prompt)
-        
+
         # 2. Parse Plan
         actions = []
         try:
@@ -55,17 +61,17 @@ class DataCleaningAgent:
             if "```json" in clean_json_str:
                 clean_json_str = clean_json_str.split("```json")[1].split("```")[0]
             elif "```" in clean_json_str:
-                 clean_json_str = clean_json_str.split("```")[1].split("```")[0]
+                clean_json_str = clean_json_str.split("```")[1].split("```")[0]
             actions = json.loads(clean_json_str)
-        except:
+        except Exception:
             pass
 
         # 3. Execute Plan (Python Fact)
         initial_rows = len(df)
         removed_by_column = {}
         fill_actions = []
-        applied_funcs = [] # Start empty, add only when used
-        
+        applied_funcs = []  # Start empty, add only when used
+
         # Handle Duplicates
         duplicates_removed = 0
         if duplicates > 0:
@@ -79,10 +85,10 @@ class DataCleaningAgent:
             col = action.get("column")
             act = action.get("action")
             reason = action.get("reason", "Standard cleaning")
-            
+
             if col not in df.columns:
                 continue
-                
+
             nan_before = int(df[col].isna().sum())
             if nan_before == 0 and act != "drop_row":
                 continue
@@ -93,7 +99,8 @@ class DataCleaningAgent:
                 removed_count = before_drop - len(df)
                 removed_by_column[col] = removed_by_column.get(col, 0) + removed_count
                 if removed_count > 0:
-                    if "df.dropna()" not in applied_funcs: applied_funcs.append("df.dropna()")
+                    if "df.dropna()" not in applied_funcs:
+                        applied_funcs.append("df.dropna()")
             elif act in ["fill_mean", "fill_median", "fill_mode", "fill_empty"]:
                 val = None
                 func_used = None
@@ -109,11 +116,13 @@ class DataCleaningAgent:
                         func_used = "df.mode()"
                 elif act == "fill_empty":
                     val = "Unknown"
-                
+
                 if val is not None:
                     df[col] = df[col].fillna(val)
-                    if "df.fillna()" not in applied_funcs: applied_funcs.append("df.fillna()")
-                    if func_used and func_used not in applied_funcs: applied_funcs.append(func_used)
+                    if "df.fillna()" not in applied_funcs:
+                        applied_funcs.append("df.fillna()")
+                    if func_used and func_used not in applied_funcs:
+                        applied_funcs.append(func_used)
                     fill_actions.append({
                         "column": col,
                         "action": act,
@@ -123,26 +132,43 @@ class DataCleaningAgent:
 
         final_rows = len(df)
         if not applied_funcs:
-            applied_funcs = ["df.copy()"] # Minimal set if no changes
-        
+            applied_funcs = ["df.copy()"]  # Minimal set if no changes
+
         # Prepare verbose thoughts for the Judge
-        fill_summary = ", ".join([f"{a['column']}: {a['action']} ({a['value']})" for a in fill_actions]) if fill_actions else "нет (пропуски либо отсутствовали, либо были удалены)"
-        
+
         # Detailed reasoning for the Judge
         reasoning = []
         rows_removed = initial_rows - final_rows
-        
+
         # Explicitly mention alignment with profiling recommendations
         reasoning.append("План очистки составлен в строгом соответствии с рекомендациями этапа профилирования.")
-        
+
         if rows_removed > 0:
-            reasoning.append(f"Удалено {rows_removed} строк. Из них {duplicates_removed} дубликатов и {rows_removed - duplicates_removed} строк с пропусками в критических колонках (например, {', '.join(removed_by_column.keys())}).")
-            reasoning.append(f"Выбор функции 'dropna' для колонок {', '.join(removed_by_column.keys())} обусловлен тем, что эти данные критически важны для Process Mining (особенно Timestamp), и их искусственное заполнение привело бы к искажению временной логики процесса.")
-        
+            removed_cols = ", ".join(removed_by_column.keys())
+            reasoning.append(
+                f"Удалено {rows_removed} строк. Из них {duplicates_removed} дубликатов "
+                f"и {rows_removed - duplicates_removed} строк с пропусками в критических колонках "
+                f"(например, {removed_cols})."
+            )
+            reasoning.append(
+                f"Выбор функции 'dropna' для колонок {removed_cols} обусловлен тем, "
+                "что эти данные критически важны для Process Mining (особенно Timestamp), "
+                "и их искусственное заполнение привело бы к искажению временной логики процесса."
+            )
+
         if fill_actions:
-            reasoning.append(f"Заполнено {len(fill_actions)} типов пропусков (использованы {', '.join([f for f in applied_funcs if 'fill' in f or 'mean' in f or 'mode' in f])}) для сохранения объема выборки.")
+            filled_funcs = ', '.join([f for f in applied_funcs if 'fill' in f or 'mean' in f or 'mode' in f])
+            reasoning.append(
+                f"Заполнено {len(fill_actions)} типов пропусков (использованы {filled_funcs}) "
+                "для сохранения объема выборки."
+            )
         else:
-            reasoning.append("Заполнение пропусков (fillna) не производилось. ПРИЧИНА: Все обнаруженные пропуски находились в критических колонках (например, 'timestamp'), где автоматическое заполнение (mean/mode) недопустимо, так как это нарушило бы хронологическую последовательность событий процесса.")
+            reasoning.append(
+                "Заполнение пропусков (fillna) не производилось. ПРИЧИНА: Все обнаруженные пропуски "
+                "находились в критических колонках (например, 'timestamp'), где автоматическое "
+                "заполнение (mean/mode) недопустимо, так как это нарушило бы хронологическую "
+                "последовательность событий процесса."
+            )
 
         cleaning_summary = (
             f"Очистка завершена. Исходно строк: {initial_rows}, осталось: {final_rows}. "
@@ -155,25 +181,25 @@ class DataCleaningAgent:
         # --- Outlier Removal (IQR Method, <5% threshold) ---
         outlier_report = []
         numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
-        
+
         for col in numeric_cols:
             if col.lower() in ['id', 'case_id', 'global_id', 'row_id']:  # Skip ID columns
                 continue
-            
+
             Q1 = df[col].quantile(0.25)
             Q3 = df[col].quantile(0.75)
             IQR = Q3 - Q1
-            
+
             if IQR == 0:  # No spread, skip
                 continue
-                
+
             lower_bound = Q1 - 1.5 * IQR
             upper_bound = Q3 + 1.5 * IQR
-            
+
             outlier_mask = (df[col] < lower_bound) | (df[col] > upper_bound)
             outlier_count = outlier_mask.sum()
             outlier_ratio = outlier_count / len(df) if len(df) > 0 else 0
-            
+
             if outlier_count > 0 and outlier_ratio < 0.05:  # Less than 5%
                 df = df[~outlier_mask]
                 outlier_report.append({
@@ -208,6 +234,4 @@ class DataCleaningAgent:
             "applied_functions": applied_funcs
         }
 
-        
         return json.dumps(result, indent=2, ensure_ascii=False), df
-

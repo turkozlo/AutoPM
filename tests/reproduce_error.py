@@ -1,10 +1,11 @@
-import pandas as pd
+
 import numpy as np
-import json
+import pandas as pd
+
 
 def test_ambiguous_truth():
     print("Testing potential ambiguous truth value locations...")
-    
+
     # Case 1: if series:
     try:
         s = pd.Series([1, 2, 3])
@@ -38,6 +39,7 @@ def test_ambiguous_truth():
             print("if df.empty passed (False)")
     except Exception as e:
         print(f"if df.empty failed: {e}")
+
 
 if __name__ == "__main__":
     test_ambiguous_truth()

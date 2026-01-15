@@ -1,21 +1,18 @@
-from langchain_mistralai import ChatMistralAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_mistralai import ChatMistralAI
 from openai import OpenAI
-from .config import (
-    PROVIDER,
-    MISTRAL_MODEL, MISTRAL_API_KEY,
-    LOCAL_BASE_URL, LOCAL_MODEL, LOCAL_API_KEY
-)
+
+from .config import LOCAL_API_KEY, LOCAL_BASE_URL, LOCAL_MODEL, MISTRAL_API_KEY, MISTRAL_MODEL, PROVIDER
 
 
 class LocalLLMClient:
     """Wrapper for native OpenAI client to match langchain interface."""
-    
+
     def __init__(self, base_url: str, model: str, api_key: str, temperature: float = 0.2):
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
         self.temperature = temperature
-    
+
     def invoke(self, messages: list) -> 'LocalLLMResponse':
         """Invoke the local LLM with langchain-style messages."""
         formatted_messages = []
@@ -25,7 +22,7 @@ class LocalLLMClient:
                 formatted_messages.append({"role": role, "content": msg.content})
             else:
                 formatted_messages.append(msg)
-        
+
         response = self.client.chat.completions.create(
             model=self.model,
             messages=formatted_messages,
@@ -36,6 +33,7 @@ class LocalLLMClient:
 
 class LocalLLMResponse:
     """Simple response wrapper to match langchain response interface."""
+
     def __init__(self, content: str):
         self.content = content
 
@@ -66,7 +64,7 @@ class LLMClient:
             SystemMessage(content=system_prompt),
             HumanMessage(content=prompt)
         ]
-        
+
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -100,7 +98,7 @@ class LLMClient:
         prompt = f"Data Head:\n{data_head}\n\nData Info:\n{data_info}"
         if feedback:
             prompt += f"\n\nЗАМЕЧАНИЯ СУДЬИ (ИСПРАВЬ ЭТО): {feedback}"
-        
+
         return self.generate_response(prompt, system_prompt)
 
     def judge_step(self, step_name: str, context: str, result: str) -> dict:
@@ -127,16 +125,17 @@ class LLMClient:
 
         prompt = f"Шаг: {step_name}\nКонтекст: {context}\nРезультат агента: {result}"
         response = self.generate_response(prompt, system_prompt)
-        
+
         try:
             import json
+
             # Try to find JSON in the response
             start = response.find('{')
             end = response.rfind('}') + 1
             if start != -1 and end != -1:
                 return json.loads(response[start:end])
             return {"passed": True, "critique": "Не удалось разобрать ответ Судьи, пропускаем.", "score": 5}
-        except:
+        except Exception:
             return {"passed": True, "critique": "Ошибка парсинга ответа Судьи.", "score": 5}
 
     def judge_cumulative_progress(self, memory: str, artifacts_count: int, cumulative_context: str = "") -> dict:
@@ -159,9 +158,9 @@ class LLMClient:
             "4. Верни JSON: {'passed': bool, 'critique': str}"
         )
         prompt = f"Long-Term Memory Summary:\n{memory}\n\nArtifacts Count: {artifacts_count}\n\nCUMULATIVE CONTEXT (Raw Outputs):\n{cumulative_context}"
-        
+
         response = self.generate_response(prompt, system_prompt)
-        
+
         try:
             import json
             start = response.find('{')
@@ -169,9 +168,8 @@ class LLMClient:
             if start != -1 and end != -1:
                 return json.loads(response[start:end])
             return {"passed": True, "critique": "Parsing error"}
-        except:
-             return {"passed": True, "critique": "Parsing error"}
-
+        except Exception:
+            return {"passed": True, "critique": "Parsing error"}
 
     def reflect_on_result(self, context: str, result: str) -> dict:
         # Legacy reflection method, kept for compatibility but Judge is preferred now
@@ -185,8 +183,10 @@ class LLMClient:
             "Ты — Менеджер Памяти агента Process Mining. Твоя задача — поддерживать актуальное и сжатое состояние процесса (Memory).\n"
             "ПРАВИЛА:\n"
             "1. ЧИТАЙ 'Current Memory' и 'Latest Tool Output'.\n"
-            "2. ДОБАВЬ новую информацию из Output в Memory. Сохраняй ТОЛЬКО факты: статус шага (Success/Fail), ключевые цифры (кол-во строк, статистику), имена созданных файлов.\n"
-            "3. ВАЖНО: Если агент выявил ИНСАЙТЫ, АНОМАЛИИ, УЗКИЕ МЕСТА или предупреждения — ОБЯЗАТЕЛЬНО сохрани их! Это нужно для консультации пользователя в конце.\n"
+            "2. ДОБАВЬ новую информацию из Output в Memory. Сохраняй ТОЛЬКО факты: статус шага (Success/Fail), "
+            "ключевые цифры (кол-во строк, статистику), имена созданных файлов.\n"
+            "3. ВАЖНО: Если агент выявил ИНСАЙТЫ, АНОМАЛИИ, УЗКИЕ МЕСТА или предупреждения — ОБЯЗАТЕЛЬНО сохрани их! "
+            "Это нужно для консультации пользователя в конце.\n"
             "4. УДАЛЯЙ устаревшие детали. Если была ошибка, но потом агент исправился — ошибку можно сократить до 'были проблемы, исправлено'.\n"
             "5. НЕ копируй полные логи. Будь краток. Используй Markdown списки.\n"
             "6. ОБЯЗАТЕЛЬНО сохраняй полный путь к каждому созданному файлу (report, image).\n"
@@ -201,23 +201,24 @@ class LLMClient:
         Returns a JSON with 'answer', optional 'knowledge_update', and optional 'tool_call'.
         """
         import json
-        
-        tools_section = ""
-        tools_list_for_capabilities = ""
+
         if tools_desc:
             tools_section = (
                 f"\n\n=== ДОСТУПНЫЕ ИНСТРУМЕНТЫ АНАЛИЗА ===\n{tools_desc}\n"
-                "**run_complex_analysis** (description='Use ONLY for complex queries that standard tools cannot handle. E.g. complex filtering, combining multiple metrics, advanced grouping.')\n"
+                "**run_complex_analysis** (description='Use ONLY for complex queries that standard tools cannot handle. "
+                "E.g. complex filtering, combining multiple metrics, advanced grouping.')\n"
                 "=== КОНЕЦ СПИСКА ИНСТРУМЕНТОВ ===\n\n"
                 "ПРАВИЛА ИСПОЛЬЗОВАНИЯ ИНСТРУМЕНТОВ:\n"
                 "- Если вопрос ТРИВИАЛЬНЫЙ (частота активностей, длительность кейсов) — используй стандартные инструменты.\n"
-                "- Если вопрос СЛОЖНЫЙ (фильтр 'начинается с X и заканчивается Y', 'средняя длительность по группе Z', 'медиана', 'перцентиль') — СРАЗУ используй `run_complex_analysis`!\n"
+                "- Если вопрос СЛОЖНЫЙ (фильтр 'начинается с X и заканчивается Y', 'средняя длительность по группе Z', "
+                "'медиана', 'перцентиль') — СРАЗУ используй `run_complex_analysis`!\n"
                 "  (Аргументы для `run_complex_analysis`: можно передать пустой JSON {}).\n"
-                "- ВНИМАТЕЛЬНО извлекай параметры из вопроса! Если спрашивают 'топ 10', 'последние 3' — передай это в аргументы (top_n=10).\n"
-                "- Когда используешь tool_call, поле answer оставь пустым (null).\n"
+                "- ВНИМАТЕЛЬНО извлекай параметры из вопроса! Если спрашивают 'топ 10', 'последние 3' — передай это "
+                "в аргументы (top_n=10).\n"
+                # When используешь tool_call, поле answer оставь пустым (null).
+                "- When используешь tool_call, поле answer оставь пустым (null).\n"
             )
-            tools_list_for_capabilities = tools_desc
-        
+
         # Human-friendly capabilities description
         capabilities_text = (
             "ЕСЛИ СПРАШИВАЮТ 'ЧТО ТЫ УМЕЕШЬ' — ответь ПОНЯТНЫМ языком:\n"
@@ -230,7 +231,7 @@ class LLMClient:
             "💾 **Запоминать важное** — если скажешь 'запомни это', сохраню в базу знаний.\n"
             "Просто спрашивай на обычном языке!\n\n"
         )
-        
+
         system_prompt = (
             "Ты — Эксперт-консультант по Process Mining с доступом к инструментам анализа данных.\n"
             "\n"
@@ -258,7 +259,7 @@ class LLMClient:
             "```\n"
             "ВАЖНО: Возвращай ТОЛЬКО JSON, без лишнего текста. Если вызываешь tool_call, answer ДОЛЖЕН быть null."
         )
-        
+
         user_prompt = (
             f"KNOWLEDGE BASE:\n{knowledge_base}\n\n"
             f"MEMORY:\n{memory}\n\n"
@@ -266,7 +267,7 @@ class LLMClient:
             f"CHAT HISTORY:\n{chat_history}\n\n"
             f"USER QUESTION:\n{question}\n"
         )
-        
+
         # Inject RAG context if available
         if self.rag_manager:
             rag_context = self.rag_manager.get_context_string(question)
@@ -299,12 +300,12 @@ class LLMClient:
             "ФОРМАТ ВЫХОДА (JSON):\n"
             '{"answer": "Человекочитаемый ответ..."}'
         )
-        
+
         user_prompt = (
             f"ВОПРОС ПОЛЬЗОВАТЕЛЯ:\n{question}\n\n"
             f"РЕЗУЛЬТАТ ИНСТРУМЕНТА:\n{json.dumps(tool_result, ensure_ascii=False, indent=2)}\n"
         )
-        
+
         response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
         cleaned_str = response_str.strip().replace("```json", "").replace("```", "").strip()
         try:
@@ -318,16 +319,16 @@ class LLMClient:
         context keys: 'knowledge_base', 'memory', 'final_report'
         """
         import json
-        
+
         context = context or {}
         knowledge_base = context.get("knowledge_base", "")
         memory = context.get("memory", "")
         final_report = context.get("final_report", "")
-        
+
         error_context = ""
         if previous_error:
             error_context = f"\n\nПРЕДЫДУЩАЯ ПОПЫТКА ЗАВЕРШИЛАСЬ ОШИБКОЙ:\n{previous_error}\nИСПРАВЬ КОД!\n"
-        
+
         system_prompt = (
             "Ты — Эксперт по анализу данных. Твоя задача — написать pandas-код для ответа на вопрос пользователя.\n"
             "\n"
@@ -343,14 +344,16 @@ class LLMClient:
             "  НЕ работай со списками или кортежами в индексах (value_counts на списках вызовет ошибку!).\n"
             "\n"
             "PANDAS BEST PRACTICES (ЧТОБЫ ИЗБЕЖАТЬ ОШИБОК):\n"
-            "1. `value_counts()` возвращает Series. У неё НЕТ `.to_dict()` для строки. Чтобы получить словарь {{index: ..., count: ...}}, используй `.reset_index().iloc[i].to_dict()`.\n"
+            "1. `value_counts()` возвращает Series. У неё НЕТ `.to_dict()` для строки. "
+            "Чтобы получить словарь {{index: ..., count: ...}}, используй `.reset_index().iloc[i].to_dict()`.\n"
             "   - ПЛОХО: `vc.iloc[0].to_dict()` (AttributeError)\n"
             "   - ХОРОШО: `vc.reset_index().iloc[0].to_dict()`\n"
             "2. ПРОВЕРЯЙ ГРАНИЦЫ ИНДЕКСА! Если просят 10000-й элемент, проверь `len(df) > 9999`.\n"
             "   - `idx = 9999; result = vc.index[idx] if len(vc) > idx else 'Элемент не найден'`\n"
             "3. `.iloc[i]` возвращает скаляр (numpy type). Используй `.item()` чтобы сделать его Python-типом.\n"
             "4. ВРЕМЯ (Duration): Перед расчетом времени ВСЕГДА делай `.sort_values('timestamp')`. Иначе получишь отрицательное время!\n"
-            "5. ФИЛЬТР ПО ПУТИ (Starts/Ends with): НЕ используй `df[df.col.isin(...)]` — это ломает порядок. Правильно: `df.groupby(case).filter(lambda x: x.iloc[0]==Start and x.iloc[-1]==End)`.\n"
+            "5. ФИЛЬТР ПО ПУТИ (Starts/Ends with): НЕ используй `df[df.col.isin(...)]` — это ломает порядок. "
+            "Правильно: `df.groupby(case).filter(lambda x: x.iloc[0]==Start and x.iloc[-1]==End)`.\n"
             "\n"
             "ПРАВИЛА:\n"
             "1. ОБЯЗАТЕЛЬНО сохрани результат в переменную 'result'.\n"
@@ -367,7 +370,7 @@ class LLMClient:
             '  "code": "result = df..."\n'
             "}"
         )
-        
+
         user_prompt = (
             f"KNOWLEDGE BASE:\n{knowledge_base}\n\n"
             f"MEMORY (ПРЕДЫДУЩИЙ КОНТЕКСТ):\n{memory}\n(Используй Memory, если вопрос ссылается на 'предыдущий' или 'такой же' фильтр!)\n\n"
@@ -376,16 +379,16 @@ class LLMClient:
             f"ВОПРОС:\n{question}"
             f"{error_context}"
         )
-        
+
         response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
         response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
         # Fix markdown stripping
         cleaned_str = response_str.strip()
         if "```json" in cleaned_str:
-             cleaned_str = cleaned_str.split("```json")[1].split("```")[0].strip()
+            cleaned_str = cleaned_str.split("```json")[1].split("```")[0].strip()
         elif "```" in cleaned_str:
-             cleaned_str = cleaned_str.split("```")[0].strip()
-        
+            cleaned_str = cleaned_str.split("```")[0].strip()
+
         try:
             return json.loads(cleaned_str)
         except json.JSONDecodeError:
@@ -395,7 +398,7 @@ class LLMClient:
             if json_match:
                 try:
                     return json.loads(json_match.group(0))
-                except:
+                except Exception:
                     pass
             # Last resort
             return {"thought": "Не удалось распарсить JSON", "code": response_str}
@@ -411,7 +414,8 @@ class LLMClient:
             "НЕ пересчитывай цифры, проверяй ПОЛНОТУ данных.\n"
             "\n"
             "КРИТИЧЕСКИЕ ОШИБКИ (is_valid: false):\n"
-            "- Пользователь спросил 'Топ 10', а в списке меньше 10 элементов. (НО: Если спросили '10-й элемент' и вернули ТОЛЬКО ЕГО — это ВЕРНО! Не требуй всех 10, если нужен только один).\n"
+            "- Пользователь спросил 'Топ 10', а в списке меньше 10 элементов. "
+            "(НО: Если спросили '10-й элемент' и вернули ТОЛЬКО ЕГО — это ВЕРНО! Не требуй всех 10, если нужен только один).\n"
             "- Пользователь спросил конкретное число, а его нет в ответе инструмента.\n"
             "- Результат пустой или содержит ошибку (например, 'Column does not exist').\n"
             "- Ответ 'Я не знаю' или 'Данных нет' — это допустимо, если данных действительно нет, но если их можно получить — дай совет.\n"
@@ -435,18 +439,18 @@ class LLMClient:
             "}"
             "Если данных достаточно и логика верна, верни is_valid: true."
         )
-        
+
         user_prompt = f"ВОПРОС: {question}\n\nРЕЗУЛЬТАТ: {result_str}"
-        
+
         response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
         # Handle markdown if present
         cleaned_str = response_str.strip().replace("```json", "").replace("```", "").strip()
-        
+
         try:
             return json.loads(cleaned_str)
-        except:
+        except Exception:
             return {
-                "is_valid": False, 
+                "is_valid": False,
                 "thought": f"Ошибка парсинга ответа проверки (JSON error). Raw: {response_str}",
                 "critique": "Не удалось проверить результат (сбой JSON).",
                 "suggestion": "Попробуй выполнить код еще раз."
@@ -470,9 +474,9 @@ class LLMClient:
             "ФОРМАТ (JSON):\n"
             '{"answer": "Ответ..."}'
         )
-        
+
         user_prompt = f"ВОПРОС:\n{question}\n\nРЕЗУЛЬТАТ ({result_type}):\n{result}"
-        
+
         response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
         cleaned_str = response_str.strip().replace("```json", "").replace("```", "").strip()
         try:
@@ -490,7 +494,8 @@ class LLMClient:
             "У тебя есть набор инструментов (агентов). Твоя задача — рассуждать и выбирать следующий шаг, основываясь на ДОЛГОСРОЧНОЙ ПАМЯТИ.\n\n"
             "ПРАВИЛА:\n"
             "1. Анализируй 'Memory' (текущее состояние). Если шаг отмечен как DONE/Success, НЕ ПОВТОРЯЙ его, переходи к следующему логическому шагу.\n"
-            "2. ЛОГИЧЕСКАЯ ЦЕПОЧКА ПО УМОЛЧАНИЮ: Data Profiling -> Data Cleaning -> Process Discovery -> Visualization -> Process Analysis -> Reporting -> Finish.\n"
+            "2. ЛОГИЧЕСКАЯ ЦЕПОЧКА ПО УМОЛЧАНИЮ: "
+            "Data Profiling -> Data Cleaning -> Process Discovery -> Visualization -> Process Analysis -> Reporting -> Finish.\n"
             "   - Visualization и Process Discovery независимы, их порядок можно менять, но обычно Visualization идет раньше.\n"
             "   - Reporting ВСЕГДА последний перед Finish.\n"
             "3. Если в Памяти есть активная проблема или ОШИБКА последнего шага, выбери инструмент для её исправления (или повтори шаг).\n"
@@ -500,19 +505,20 @@ class LLMClient:
             "     \"tool_name\": \"Название инструмента из списка Available Tools (или 'Finish', если все готово)\"\n"
             "   }\n"
         )
-        
+
         prompt = f"Long-Term Memory:\n{memory}\n\nAvailable Tools:\n{tools_description}\n\nКакой следующий шаг?"
-        
+
         response = self.generate_response(prompt, system_prompt)
-        
+
         try:
             import json
+
             # Try to find JSON in the response
             start = response.find('{')
             end = response.rfind('}') + 1
             if start != -1 and end != -1:
                 return json.loads(response[start:end])
             # Fallback for bad LLM output
-            return {"thought": f"Failed to parse JSON. Raw response: {response}", "tool_name": "Reporting"} 
+            return {"thought": f"Failed to parse JSON. Raw response: {response}", "tool_name": "Reporting"}
         except Exception as e:
             return {"thought": f"Error parsing logic: {e}", "tool_name": "Final Report"}

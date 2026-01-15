@@ -3,14 +3,15 @@ Chat Tools for Interactive QA Mode.
 Comprehensive library of pandas-based analysis functions.
 These functions can be called by the agent during chat to perform dynamic analysis.
 """
-import pandas as pd
-import numpy as np
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
+import numpy as np
+import pandas as pd
 
 # ============================================
 # BASIC INFO FUNCTIONS
 # ============================================
+
 
 def get_dataframe_info(df: pd.DataFrame) -> Dict[str, Any]:
     """Returns basic info about the DataFrame: shape, columns, dtypes."""
@@ -27,7 +28,7 @@ def get_column_stats(df: pd.DataFrame, column: str) -> Dict[str, Any]:
     """Returns detailed statistics for a specific column."""
     if column not in df.columns:
         return {"error": f"Column '{column}' not found"}
-    
+
     col = df[column]
     result = {
         "column": column,
@@ -36,7 +37,7 @@ def get_column_stats(df: pd.DataFrame, column: str) -> Dict[str, Any]:
         "null_count": int(col.isna().sum()),
         "unique_count": int(col.nunique())
     }
-    
+
     if pd.api.types.is_numeric_dtype(col):
         result.update({
             "mean": round(float(col.mean()), 4) if not col.isna().all() else None,
@@ -46,7 +47,7 @@ def get_column_stats(df: pd.DataFrame, column: str) -> Dict[str, Any]:
             "max": float(col.max()) if not col.isna().all() else None,
             "sum": float(col.sum()) if not col.isna().all() else None
         })
-    
+
     return result
 
 
@@ -70,7 +71,7 @@ def get_value_counts(df: pd.DataFrame, column: str, top_n: int = 10, normalize: 
     """Returns value counts for a column."""
     if column not in df.columns:
         return {"error": f"Column '{column}' not found"}
-    
+
     vc = df[column].value_counts(normalize=normalize).head(top_n)
     return {
         "column": column,
@@ -83,7 +84,7 @@ def get_unique_values(df: pd.DataFrame, column: str, limit: int = 50) -> Dict[st
     """Returns unique values in a column (up to limit)."""
     if column not in df.columns:
         return {"error": f"Column '{column}' not found"}
-    
+
     unique = df[column].dropna().unique()
     return {
         "column": column,
@@ -100,7 +101,7 @@ def filter_by_value(df: pd.DataFrame, column: str, value: Any) -> Dict[str, Any]
     """Filters DataFrame by exact value match, returns count and sample."""
     if column not in df.columns:
         return {"error": f"Column '{column}' not found"}
-    
+
     filtered = df[df[column] == value]
     return {
         "original_rows": len(df),
@@ -114,13 +115,13 @@ def filter_numeric_range(df: pd.DataFrame, column: str, min_val: float = None, m
     """Filters DataFrame by numeric range."""
     if column not in df.columns:
         return {"error": f"Column '{column}' not found"}
-    
+
     filtered = df.copy()
     if min_val is not None:
         filtered = filtered[filtered[column] >= min_val]
     if max_val is not None:
         filtered = filtered[filtered[column] <= max_val]
-    
+
     return {
         "original_rows": len(df),
         "filtered_rows": len(filtered),
@@ -132,7 +133,7 @@ def filter_contains(df: pd.DataFrame, column: str, substring: str, case_sensitiv
     """Filters DataFrame where column contains substring."""
     if column not in df.columns:
         return {"error": f"Column '{column}' not found"}
-    
+
     filtered = df[df[column].astype(str).str.contains(substring, case=case_sensitive, na=False)]
     return {
         "original_rows": len(df),
@@ -149,7 +150,7 @@ def group_and_count(df: pd.DataFrame, group_by: str, top_n: int = 10) -> Dict[st
     """Groups by column and counts occurrences."""
     if group_by not in df.columns:
         return {"error": f"Column '{group_by}' not found"}
-    
+
     grouped = df.groupby(group_by).size().sort_values(ascending=False).head(top_n)
     return {
         "group_by": group_by,
@@ -164,11 +165,11 @@ def group_and_aggregate(df: pd.DataFrame, group_by: str, agg_column: str, agg_fu
         return {"error": f"Column '{group_by}' not found"}
     if agg_column not in df.columns:
         return {"error": f"Column '{agg_column}' not found"}
-    
+
     valid_funcs = ["mean", "sum", "count", "min", "max", "median", "std"]
     if agg_func not in valid_funcs:
         return {"error": f"Invalid agg_func. Use one of: {valid_funcs}"}
-    
+
     grouped = df.groupby(group_by)[agg_column].agg(agg_func).sort_values(ascending=False).head(top_n)
     return {
         "group_by": group_by,
@@ -186,7 +187,7 @@ def get_top_n(df: pd.DataFrame, column: str, n: int = 10, ascending: bool = Fals
     """Returns top N rows sorted by column."""
     if column not in df.columns:
         return {"error": f"Column '{column}' not found"}
-    
+
     sorted_df = df.sort_values(by=column, ascending=ascending).head(n)
     return {
         "sorted_by": column,
@@ -203,7 +204,7 @@ def get_correlation(df: pd.DataFrame, column1: str, column2: str) -> Dict[str, A
     """Calculates correlation between two numeric columns."""
     if column1 not in df.columns or column2 not in df.columns:
         return {"error": "One or both columns not found"}
-    
+
     try:
         corr = df[column1].corr(df[column2])
         return {
@@ -235,7 +236,7 @@ def get_percentile(df: pd.DataFrame, column: str, percentile: float) -> Dict[str
     """Returns the value at a given percentile (0-100)."""
     if column not in df.columns:
         return {"error": f"Column '{column}' not found"}
-    
+
     try:
         value = df[column].quantile(percentile / 100)
         return {
@@ -251,7 +252,7 @@ def get_quantiles(df: pd.DataFrame, column: str, q: List[float] = [0.25, 0.5, 0.
     """Returns multiple quantiles for a column."""
     if column not in df.columns:
         return {"error": f"Column '{column}' not found"}
-    
+
     try:
         quantiles = df[column].quantile(q)
         return {
@@ -273,17 +274,17 @@ def calculate_path_frequency(df: pd.DataFrame, case_col: str, activity_col: str,
             traces = df.sort_values(by=[case_col, 'timestamp']).groupby(case_col)[activity_col].apply(tuple)
         else:
             traces = df.groupby(case_col)[activity_col].apply(tuple)
-        
+
         total_cases = len(traces)
         path_counts = traces.value_counts()
         top_paths = path_counts.head(top_n)
-        
+
         result = {
             "total_unique_paths": len(path_counts),
             "total_cases": total_cases,
             "top_paths": []
         }
-        
+
         for path, count in top_paths.items():
             percentage = (count / total_cases) * 100
             result["top_paths"].append({
@@ -292,7 +293,7 @@ def calculate_path_frequency(df: pd.DataFrame, case_col: str, activity_col: str,
                 "count": int(count),
                 "percentage": round(percentage, 2)
             })
-        
+
         return result
     except Exception as e:
         return {"error": str(e)}
@@ -305,19 +306,19 @@ def get_rarest_paths(df: pd.DataFrame, case_col: str, activity_col: str, bottom_
             traces = df.sort_values(by=[case_col, 'timestamp']).groupby(case_col)[activity_col].apply(tuple)
         else:
             traces = df.groupby(case_col)[activity_col].apply(tuple)
-        
+
         total_cases = len(traces)
         path_counts = traces.value_counts()
-        
+
         # Get bottom N (rarest)
         rarest_paths = path_counts.tail(bottom_n).sort_values(ascending=True)
-        
+
         result = {
             "total_unique_paths": len(path_counts),
             "total_cases": total_cases,
             "rarest_paths": []
         }
-        
+
         for path, count in rarest_paths.items():
             percentage = (count / total_cases) * 100
             result["rarest_paths"].append({
@@ -326,7 +327,7 @@ def get_rarest_paths(df: pd.DataFrame, case_col: str, activity_col: str, bottom_
                 "count": int(count),
                 "percentage": round(percentage, 4)  # More precision for rare paths
             })
-        
+
         return result
     except Exception as e:
         return {"error": str(e)}
@@ -337,10 +338,10 @@ def get_case_duration_stats(df: pd.DataFrame, case_col: str, timestamp_col: str)
     try:
         df_temp = df.copy()
         df_temp[timestamp_col] = pd.to_datetime(df_temp[timestamp_col])
-        
+
         case_durations = df_temp.groupby(case_col)[timestamp_col].agg(['min', 'max'])
         case_durations['duration_seconds'] = (case_durations['max'] - case_durations['min']).dt.total_seconds()
-        
+
         return {
             "total_cases": len(case_durations),
             "mean_duration_hours": round(case_durations['duration_seconds'].mean() / 3600, 2),
@@ -358,7 +359,7 @@ def get_activity_frequency(df: pd.DataFrame, activity_col: str, top_n: int = 10)
     try:
         freq = df[activity_col].value_counts().head(top_n)
         total = len(df)
-        
+
         return {
             "total_events": total,
             "unique_activities": int(df[activity_col].nunique()),
@@ -390,12 +391,12 @@ def find_bottlenecks(df: pd.DataFrame, case_col: str, activity_col: str, timesta
         df_temp = df.copy()
         df_temp[timestamp_col] = pd.to_datetime(df_temp[timestamp_col])
         df_temp = df_temp.sort_values(by=[case_col, timestamp_col])
-        
+
         df_temp['prev_timestamp'] = df_temp.groupby(case_col)[timestamp_col].shift(1)
         df_temp['wait_time'] = (df_temp[timestamp_col] - df_temp['prev_timestamp']).dt.total_seconds() / 3600  # hours
-        
+
         bottlenecks = df_temp.groupby(activity_col)['wait_time'].mean().sort_values(ascending=False).head(top_n)
-        
+
         return {
             "bottlenecks": [
                 {"activity": str(act), "avg_wait_hours": round(float(wait), 2)}
@@ -428,7 +429,7 @@ CHAT_TOOLS = {
         "required_args": [],
         "optional_args": ["columns"]
     },
-    
+
     # Value Counts
     "get_value_counts": {
         "function": get_value_counts,
@@ -442,7 +443,7 @@ CHAT_TOOLS = {
         "required_args": ["column"],
         "optional_args": ["limit"]
     },
-    
+
     # Filtering
     "filter_by_value": {
         "function": filter_by_value,
@@ -461,7 +462,7 @@ CHAT_TOOLS = {
         "required_args": ["column", "substring"],
         "optional_args": ["case_sensitive"]
     },
-    
+
     # Aggregation
     "group_and_count": {
         "function": group_and_count,
@@ -475,7 +476,7 @@ CHAT_TOOLS = {
         "required_args": ["group_by", "agg_column", "agg_func"],
         "optional_args": ["top_n"]
     },
-    
+
     # Sorting
     "get_top_n": {
         "function": get_top_n,
@@ -483,7 +484,7 @@ CHAT_TOOLS = {
         "required_args": ["column"],
         "optional_args": ["n", "ascending"]
     },
-    
+
     # Correlation
     "get_correlation": {
         "function": get_correlation,
@@ -496,7 +497,7 @@ CHAT_TOOLS = {
         "required_args": [],
         "optional_args": ["columns"]
     },
-    
+
     # Percentiles
     "get_percentile": {
         "function": get_percentile,
@@ -509,7 +510,7 @@ CHAT_TOOLS = {
         "required_args": ["column"],
         "optional_args": ["q"]
     },
-    
+
     # Process Mining
     "calculate_path_frequency": {
         "function": calculate_path_frequency,
@@ -561,10 +562,10 @@ def execute_tool(tool_name: str, args: Dict[str, Any], df: pd.DataFrame) -> Dict
     """Executes a tool by name with given arguments."""
     if tool_name not in CHAT_TOOLS:
         return {"error": f"Неизвестный инструмент: {tool_name}. Попробуй один из: {', '.join(CHAT_TOOLS.keys())}"}
-    
+
     tool_info = CHAT_TOOLS[tool_name]
     func = tool_info["function"]
-    
+
     try:
         return func(df, **args)
     except TypeError as e:

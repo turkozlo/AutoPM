@@ -1,10 +1,12 @@
-import yaml
 import os
 from pathlib import Path
+
+import yaml
 
 # Define base paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
+
 
 def load_config():
     if not CONFIG_PATH.exists():
@@ -12,9 +14,10 @@ def load_config():
             f"Configuration file not found at {CONFIG_PATH}\n"
             f"Please copy config.example.yaml to config.yaml and fill in your settings."
         )
-    
+
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
 
 config = load_config()
 

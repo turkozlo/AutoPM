@@ -1,24 +1,25 @@
-import pandas as pd
-import json
+from pm_agent.agents.visualization import VisualizationAgent
+from pm_agent.agents.profiling import DataProfilingAgent
+from pm_agent.agents.discovery import ProcessDiscoveryAgent
+from pm_agent.agents.analysis import ProcessAnalysisAgent
 import os
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 # Add project root to path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from pm_agent.agents.profiling import DataProfilingAgent
-from pm_agent.agents.discovery import ProcessDiscoveryAgent
-from pm_agent.agents.analysis import ProcessAnalysisAgent
-from pm_agent.agents.visualization import VisualizationAgent
 
 class MockLLM:
     def generate_response(self, prompt, system_prompt, **kwargs):
         if "candidates" in prompt.lower():
             return '{"process_mining_readiness": {"score": 0, "case_id_candidates": ["A"], "activity_candidates": ["B"], "timestamp_candidates": ["C"]}, "thoughts": "Mock"}'
         if "plan" in prompt.lower() or "candidates" in system_prompt.lower():
-             return '[]'
+            return '[]'
         return "Mock Interpretation"
+
 
 def test_empty_data():
     df = pd.DataFrame(columns=['A', 'B', 'C'])
@@ -60,6 +61,7 @@ def test_empty_data():
         sys.exit(1)
     else:
         print("SUCCESS: No images created on empty data.")
+
 
 if __name__ == "__main__":
     test_empty_data()

@@ -1,5 +1,6 @@
 import json
-from typing import Dict, Any
+from typing import Any, Dict
+
 
 class ReportAgent:
     def __init__(self, llm_client):
@@ -24,14 +25,15 @@ class ReportAgent:
             "5. Структура: "
             "   - # Аналитический отчет по процессу "
             "   - ## 1. Обзор данных (Profiling): "
-            "     Для КАЖДОЙ колонки укажи: тип данных, количество пропусков (и %), количество УНИКАЛЬНЫХ значений (unique), и ТОП-10 самых частых значений (top_10) с их количеством. "
+            "     Для КАЖДОЙ колонки укажи: тип данных, количество пропусков (и %), "
+            "количество УНИКАЛЬНЫХ значений (unique), и ТОП-10 самых частых значений (top_10) с их количеством. "
             "   - ## 2. Очистка данных (Cleaning): сколько удалено, что заполнено, и ПОЧЕМУ (обоснование из thoughts). "
             "   - ## 3. Визуальный анализ (Visualization): интерпретация графиков со ссылками на файлы. "
             "   - ## 4. Модель процесса (Discovery): количество активностей, переходов, циклов и ИНТЕРАКТИВНАЯ СХЕМА (Mermaid). "
             "   - ## 5. Производительность (Analysis): среднее время, медиана, p95, узкие места, аномалии. "
             "   - ## 6. Заключение и рекомендации. "
         )
-        
+
         # Prepare context
         context = ""
         for section, data in artifacts.items():
@@ -40,9 +42,8 @@ class ReportAgent:
                 context += data
             else:
                 context += json.dumps(data, indent=2, ensure_ascii=False)
-        
+
         prompt = f"Сгенерируй отчет на основе этих данных:\n{context}"
-        
+
         report = self.llm.generate_response(prompt, system_prompt)
         return report
-

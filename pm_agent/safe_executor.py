@@ -2,12 +2,13 @@
 Safe Executor for Code Interpreter.
 Executes user-generated pandas code in a sandboxed environment.
 """
-import pandas as pd
-import numpy as np
+import ast
 import signal
 import sys
-import ast
-from typing import Dict, Any, Optional
+from typing import Any, Dict
+
+import numpy as np
+import pandas as pd
 
 
 class TimeoutError(Exception):
@@ -38,14 +39,14 @@ def validate_code_syntax(code: str) -> Dict[str, Any]:
 def execute_pandas_code(code: str, df: pd.DataFrame, timeout_seconds: int = 5) -> Dict[str, Any]:
     """
     Executes pandas code in a restricted namespace.
-    
+
     Security measures:
     - Only df, pd, np available
     - __builtins__ blocked (no open, exec, eval, import)
     - Execution on df.copy() to prevent mutations
     - Timeout to prevent infinite loops
     - Result size limit (10KB)
-    
+
     Returns:
         {"success": True, "result": ..., "result_type": "..."} or
         {"success": False, "error": "..."}
@@ -74,44 +75,44 @@ def execute_pandas_code(code: str, df: pd.DataFrame, timeout_seconds: int = 5) -
         "print": lambda *args, **kwargs: None,  # Disable print
         "__builtins__": {}  # Block dangerous builtins
     }
-    
+
     local_vars = {}
-    
+
     try:
         # Set timeout (Unix only, skip on Windows)
         if sys.platform != 'win32':
             signal.signal(signal.SIGALRM, timeout_handler)
             signal.alarm(timeout_seconds)
-        
+
         # Execute code
         exec(code, allowed_globals, local_vars)
-        
+
         # Cancel timeout
         if sys.platform != 'win32':
             signal.alarm(0)
-        
+
         # Get result
         result = local_vars.get("result", None)
-        
+
         if result is None:
             return {
-                "success": False, 
+                "success": False,
                 "error": "Код выполнен, но переменная 'result' не определена. Сохрани результат в переменную 'result'."
             }
-        
+
         # Convert result to JSON-serializable format
         result_str = format_result(result)
-        
+
         # Check size limit (10KB)
         if len(result_str) > 10240:
             result_str = result_str[:10000] + "\n... (обрезано, слишком большой результат)"
-        
+
         return {
             "success": True,
             "result": result_str,
             "result_type": type(result).__name__
         }
-        
+
     except TimeoutError as e:
         return {"success": False, "error": str(e)}
     except SyntaxError as e:
@@ -151,15 +152,15 @@ def get_df_info_for_llm(df: pd.DataFrame) -> str:
         f"Колонки: {', '.join(df.columns[:15])}" + ("..." if len(df.columns) > 15 else ""),
         "Типы данных:"
     ]
-    
+
     for col in df.columns[:10]:
         dtype = str(df[col].dtype)
         sample = str(df[col].dropna().iloc[0]) if len(df[col].dropna()) > 0 else "N/A"
         if len(sample) > 30:
             sample = sample[:27] + "..."
         info_lines.append(f"  - {col}: {dtype} (пример: {sample})")
-    
+
     if len(df.columns) > 10:
         info_lines.append(f"  ... и еще {len(df.columns) - 10} колонок")
-    
+
     return "\n".join(info_lines)

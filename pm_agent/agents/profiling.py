@@ -1,6 +1,8 @@
-import pandas as pd
 import json
-import numpy as np
+
+
+import pandas as pd
+
 
 class DataProfilingAgent:
     def __init__(self, df: pd.DataFrame, llm_client):
@@ -14,24 +16,23 @@ class DataProfilingAgent:
         """
         total_rows = len(self.df)
         col_stats = {}
-        
-        numeric_cols = []
+
         for col in self.df.columns:
             col_data = self.df[col]
             nan_count = int(col_data.isna().sum())
             unique_count = int(col_data.nunique())
-            
+
             stats = {
                 "dtype": str(col_data.dtype),
                 "nan": nan_count,
                 "nan_percent": float(round((nan_count / total_rows) * 100, 6)),
                 "unique": unique_count
             }
-            
+
             # Mode
             if not col_data.dropna().empty:
                 stats["mode"] = str(col_data.mode()[0])
-            
+
             # Top 10 values (useful for LLM to identify column semantic)
             top_counts = col_data.value_counts().head(10)
             stats["top_10"] = [
@@ -41,9 +42,9 @@ class DataProfilingAgent:
                     "percent": float(round((v / total_rows) * 100, 6))
                 } for k, v in top_counts.items()
             ]
-            
+
             col_stats[col] = stats
-            
+
         # Ask LLM to analyze
         system_prompt = (
             "Ты — Data Profiling Agent. Твоя задача — проанализировать статистику колонок датасета для задачи Process Mining. "
@@ -58,13 +59,13 @@ class DataProfilingAgent:
             "case_id_candidates, activity_candidates, timestamp_candidates, justifications) и 'thoughts'. "
             "В 'thoughts' объясни свой выбор."
         )
-        
+
         prompt = f"Column Stats:\n{json.dumps(col_stats, indent=2, ensure_ascii=False)}"
         if feedback:
             prompt += f"\n\nКРИТИКА СУДЬИ (ИСПРАВЬ ОШИБКИ): {feedback}"
-            
+
         response = self.llm.generate_response(prompt, system_prompt)
-        
+
         try:
             # Parse LLM response
             start = response.find('{')
@@ -73,7 +74,7 @@ class DataProfilingAgent:
                 analysis = json.loads(response[start:end])
             else:
                 raise ValueError("No JSON found")
-                
+
             # Merge with raw stats
             result = {
                 "row_count": total_rows,
@@ -85,8 +86,6 @@ class DataProfilingAgent:
                 "applied_functions": ["df.describe", "df.nunique", "llm.analyze"]
             }
             return json.dumps(result, indent=2, ensure_ascii=False)
-            
+
         except Exception as e:
             return json.dumps({"error": f"LLM Analysis failed: {e}. Raw: {response}"}, ensure_ascii=False)
-
-
