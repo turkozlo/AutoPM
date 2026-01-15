@@ -2,31 +2,38 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_mistralai import ChatMistralAI
 from openai import OpenAI
 
-from .config import LOCAL_API_KEY, LOCAL_BASE_URL, LOCAL_MODEL, MISTRAL_API_KEY, MISTRAL_MODEL, PROVIDER
+from .config import (
+    LOCAL_API_KEY,
+    LOCAL_BASE_URL,
+    LOCAL_MODEL,
+    MISTRAL_API_KEY,
+    MISTRAL_MODEL,
+    PROVIDER,
+)
 
 
 class LocalLLMClient:
     """Wrapper for native OpenAI client to match langchain interface."""
 
-    def __init__(self, base_url: str, model: str, api_key: str, temperature: float = 0.2):
+    def __init__(
+        self, base_url: str, model: str, api_key: str, temperature: float = 0.2
+    ):
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
         self.temperature = temperature
 
-    def invoke(self, messages: list) -> 'LocalLLMResponse':
+    def invoke(self, messages: list) -> "LocalLLMResponse":
         """Invoke the local LLM with langchain-style messages."""
         formatted_messages = []
         for msg in messages:
-            if hasattr(msg, 'content'):
+            if hasattr(msg, "content"):
                 role = "system" if isinstance(msg, SystemMessage) else "user"
                 formatted_messages.append({"role": role, "content": msg.content})
             else:
                 formatted_messages.append(msg)
 
         response = self.client.chat.completions.create(
-            model=self.model,
-            messages=formatted_messages,
-            temperature=self.temperature
+            model=self.model, messages=formatted_messages, temperature=self.temperature
         )
         return LocalLLMResponse(response.choices[0].message.content)
 
@@ -46,24 +53,25 @@ class LLMClient:
                 base_url=LOCAL_BASE_URL,
                 model=LOCAL_MODEL,
                 api_key=LOCAL_API_KEY,
-                temperature=0.2
+                temperature=0.2,
             )
         else:
             self.client = ChatMistralAI(
-                model=MISTRAL_MODEL,
-                api_key=MISTRAL_API_KEY,
-                temperature=0.2
+                model=MISTRAL_MODEL, api_key=MISTRAL_API_KEY, temperature=0.2
             )
 
-    def generate_response(self, prompt: str, system_prompt: str = "Ты полезный ИИ-ассистент.", json_mode: bool = False) -> str:
+    def generate_response(
+        self,
+        prompt: str,
+        system_prompt: str = "Ты полезный ИИ-ассистент.",
+        json_mode: bool = False,
+    ) -> str:
         """
         Generates a response from the LLM with retry logic for rate limits.
         """
         import time
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=prompt)
-        ]
+
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=prompt)]
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -80,7 +88,9 @@ class LLMClient:
                 return f"Ошибка: {e}"
         return "Ошибка: Превышено количество попыток."
 
-    def analyze_data_cleaning(self, data_head: str, data_info: str, feedback: str = "") -> str:
+    def analyze_data_cleaning(
+        self, data_head: str, data_info: str, feedback: str = ""
+    ) -> str:
         """
         Asks LLM how to clean the data based on head and info.
         Returns a JSON-like string or instructions.
@@ -130,15 +140,25 @@ class LLMClient:
             import json
 
             # Try to find JSON in the response
-            start = response.find('{')
-            end = response.rfind('}') + 1
+            start = response.find("{")
+            end = response.rfind("}") + 1
             if start != -1 and end != -1:
                 return json.loads(response[start:end])
-            return {"passed": True, "critique": "Не удалось разобрать ответ Судьи, пропускаем.", "score": 5}
+            return {
+                "passed": True,
+                "critique": "Не удалось разобрать ответ Судьи, пропускаем.",
+                "score": 5,
+            }
         except Exception:
-            return {"passed": True, "critique": "Ошибка парсинга ответа Судьи.", "score": 5}
+            return {
+                "passed": True,
+                "critique": "Ошибка парсинга ответа Судьи.",
+                "score": 5,
+            }
 
-    def judge_cumulative_progress(self, memory: str, artifacts_count: int, cumulative_context: str = "") -> dict:
+    def judge_cumulative_progress(
+        self, memory: str, artifacts_count: int, cumulative_context: str = ""
+    ) -> dict:
         """
         Evaluates the cumulative progress of the session so far using full step outputs.
         Returns {'passed': bool, 'critique': str}
@@ -163,8 +183,9 @@ class LLMClient:
 
         try:
             import json
-            start = response.find('{')
-            end = response.rfind('}') + 1
+
+            start = response.find("{")
+            end = response.rfind("}") + 1
             if start != -1 and end != -1:
                 return json.loads(response[start:end])
             return {"passed": True, "critique": "Parsing error"}
@@ -175,7 +196,9 @@ class LLMClient:
         # Legacy reflection method, kept for compatibility but Judge is preferred now
         return self.judge_step("Reflection", context, result)
 
-    def update_memory(self, current_memory: str, step_name: str, step_result: str) -> str:
+    def update_memory(
+        self, current_memory: str, step_name: str, step_result: str
+    ) -> str:
         """
         Updates the long-term memory with the result of a step.
         """
@@ -195,7 +218,15 @@ class LLMClient:
         prompt = f"Current Memory:\n{current_memory}\n\nLatest Tool ({step_name}) Output:\n{step_result}"
         return self.generate_response(prompt, system_prompt)
 
-    def answer_user_question(self, memory: str, final_report: str, chat_history: str, question: str, knowledge_base: str = "", tools_desc: str = "") -> dict:
+    def answer_user_question(
+        self,
+        memory: str,
+        final_report: str,
+        chat_history: str,
+        question: str,
+        knowledge_base: str = "",
+        tools_desc: str = "",
+    ) -> dict:
         """
         Answers user questions based on memory, report, chat history, KNOWLEDGE BASE, and optionally using TOOLS.
         Returns a JSON with 'answer', optional 'knowledge_update', and optional 'tool_call'.
@@ -240,10 +271,10 @@ class LLMClient:
             "2. FINAL REPORT — итоговый отчет с метриками.\n"
             "3. KNOWLEDGE BASE — глоссарий и факты от пользователя.\n"
             "4. CHAT HISTORY — история диалога.\n"
-            + tools_section +
-            "\n"
-            + capabilities_text +
-            "ПРАВИЛА:\n"
+            + tools_section
+            + "\n"
+            + capabilities_text
+            + "ПРАВИЛА:\n"
             "1. Если CHAT HISTORY пуст — пользователь ещё ничего не спрашивал. НЕ выдумывай.\n"
             "2. Если пользователь просит запомнить важное — сохрани в knowledge_update.\n"
             "3. Если нужны РАСЧЕТЫ — используй tool_call, НЕ выдумывай цифры.\n"
@@ -273,9 +304,13 @@ class LLMClient:
             rag_context = self.rag_manager.get_context_string(question)
             user_prompt = rag_context + "\n\n" + user_prompt
 
-        response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
+        response_str = self.generate_response(
+            user_prompt, system_prompt, json_mode=True
+        )
         # Clean markdown if present
-        cleaned_str = response_str.strip().replace("```json", "").replace("```", "").strip()
+        cleaned_str = (
+            response_str.strip().replace("```json", "").replace("```", "").strip()
+        )
         try:
             return json.loads(cleaned_str)
         except json.JSONDecodeError:
@@ -287,6 +322,7 @@ class LLMClient:
         Interprets tool result into a human-friendly answer.
         """
         import json
+
         system_prompt = (
             "Ты — Эксперт-консультант по Process Mining.\n"
             "Пользователь задал вопрос, и был вызван инструмент анализа.\n"
@@ -306,14 +342,24 @@ class LLMClient:
             f"РЕЗУЛЬТАТ ИНСТРУМЕНТА:\n{json.dumps(tool_result, ensure_ascii=False, indent=2)}\n"
         )
 
-        response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
-        cleaned_str = response_str.strip().replace("```json", "").replace("```", "").strip()
+        response_str = self.generate_response(
+            user_prompt, system_prompt, json_mode=True
+        )
+        cleaned_str = (
+            response_str.strip().replace("```json", "").replace("```", "").strip()
+        )
         try:
             return json.loads(cleaned_str)
         except json.JSONDecodeError:
             return {"answer": str(tool_result)}
 
-    def generate_pandas_code(self, question: str, df_info: str, previous_error: str = "", context: dict = None) -> dict:
+    def generate_pandas_code(
+        self,
+        question: str,
+        df_info: str,
+        previous_error: str = "",
+        context: dict = None,
+    ) -> dict:
         """
         Generates pandas code to answer the user's question, using full context.
         context keys: 'knowledge_base', 'memory', 'final_report'
@@ -362,8 +408,8 @@ class LLMClient:
             "4. ВАЖНО: 'result' должен быть стандартным Python типом (int, float, dict, list), а НЕ numpy.int64. Используй .item() для скаляров.\n"
             "4. Если нужна группировка по кейсам, используй колонку с ID кейса.\n"
             "5. Результат должен быть JSON-сериализуемым (числа, строки, списки, dict).\n"
-            + error_context +
-            "\n"
+            + error_context
+            + "\n"
             "ФОРМАТ ОТВЕТА (JSON):\n"
             "{\n"
             '  "thought": "Рассуждение: что нужно сделать и как",\n'
@@ -380,8 +426,12 @@ class LLMClient:
             f"{error_context}"
         )
 
-        response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
-        response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
+        response_str = self.generate_response(
+            user_prompt, system_prompt, json_mode=True
+        )
+        response_str = self.generate_response(
+            user_prompt, system_prompt, json_mode=True
+        )
         # Fix markdown stripping
         cleaned_str = response_str.strip()
         if "```json" in cleaned_str:
@@ -394,7 +444,8 @@ class LLMClient:
         except json.JSONDecodeError:
             # Fallback: try to find ANYTHING that looks like JSON
             import re
-            json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
+
+            json_match = re.search(r"\{.*\}", response_str, re.DOTALL)
             if json_match:
                 try:
                     return json.loads(json_match.group(0))
@@ -409,6 +460,7 @@ class LLMClient:
         Returns: {"is_valid": bool, "critique": str, "suggestion": str}
         """
         import json
+
         system_prompt = (
             "Ты — строгий критик. Проверь, содержит ли результат ВСЕ необходимые данные для ответа.\n"
             "НЕ пересчитывай цифры, проверяй ПОЛНОТУ данных.\n"
@@ -442,9 +494,13 @@ class LLMClient:
 
         user_prompt = f"ВОПРОС: {question}\n\nРЕЗУЛЬТАТ: {result_str}"
 
-        response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
+        response_str = self.generate_response(
+            user_prompt, system_prompt, json_mode=True
+        )
         # Handle markdown if present
-        cleaned_str = response_str.strip().replace("```json", "").replace("```", "").strip()
+        cleaned_str = (
+            response_str.strip().replace("```json", "").replace("```", "").strip()
+        )
 
         try:
             return json.loads(cleaned_str)
@@ -453,14 +509,17 @@ class LLMClient:
                 "is_valid": False,
                 "thought": f"Ошибка парсинга ответа проверки (JSON error). Raw: {response_str}",
                 "critique": "Не удалось проверить результат (сбой JSON).",
-                "suggestion": "Попробуй выполнить код еще раз."
+                "suggestion": "Попробуй выполнить код еще раз.",
             }
 
-    def interpret_code_result(self, question: str, result: str, result_type: str) -> dict:
+    def interpret_code_result(
+        self, question: str, result: str, result_type: str
+    ) -> dict:
         """
         Interprets code execution result into a human-friendly answer.
         """
         import json
+
         system_prompt = (
             "Ты — Эксперт-консультант по Process Mining.\n"
             "Пользователь задал вопрос, и был выполнен pandas-код.\n"
@@ -477,8 +536,12 @@ class LLMClient:
 
         user_prompt = f"ВОПРОС:\n{question}\n\nРЕЗУЛЬТАТ ({result_type}):\n{result}"
 
-        response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
-        cleaned_str = response_str.strip().replace("```json", "").replace("```", "").strip()
+        response_str = self.generate_response(
+            user_prompt, system_prompt, json_mode=True
+        )
+        cleaned_str = (
+            response_str.strip().replace("```json", "").replace("```", "").strip()
+        )
         try:
             return json.loads(cleaned_str)
         except json.JSONDecodeError:
@@ -501,8 +564,8 @@ class LLMClient:
             "3. Если в Памяти есть активная проблема или ОШИБКА последнего шага, выбери инструмент для её исправления (или повтори шаг).\n"
             "4. ОТВЕТ ДОЛЖЕН БЫТЬ В ФОРМАТЕ JSON:\n"
             "   {\n"
-            "     \"thought\": \"Твое рассуждение. Что мы уже сделали (согласно Memory)? Что нужно сделать дальше?\",\n"
-            "     \"tool_name\": \"Название инструмента из списка Available Tools (или 'Finish', если все готово)\"\n"
+            '     "thought": "Твое рассуждение. Что мы уже сделали (согласно Memory)? Что нужно сделать дальше?",\n'
+            '     "tool_name": "Название инструмента из списка Available Tools (или \'Finish\', если все готово)"\n'
             "   }\n"
         )
 
@@ -514,11 +577,14 @@ class LLMClient:
             import json
 
             # Try to find JSON in the response
-            start = response.find('{')
-            end = response.rfind('}') + 1
+            start = response.find("{")
+            end = response.rfind("}") + 1
             if start != -1 and end != -1:
                 return json.loads(response[start:end])
             # Fallback for bad LLM output
-            return {"thought": f"Failed to parse JSON. Raw response: {response}", "tool_name": "Reporting"}
+            return {
+                "thought": f"Failed to parse JSON. Raw response: {response}",
+                "tool_name": "Reporting",
+            }
         except Exception as e:
             return {"thought": f"Error parsing logic: {e}", "tool_name": "Final Report"}

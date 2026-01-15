@@ -14,20 +14,22 @@ class MockLLM:
 
 
 def test_retry_logic():
-    df = pd.DataFrame({
-        'case': [1, 1, 2],
-        'activity': ['A', 'B', None],
-        'timestamp': ['2023-01-01 10:00', '2023-01-01 11:00', '2023-01-01 12:00']
-    })
+    df = pd.DataFrame(
+        {
+            "case": [1, 1, 2],
+            "activity": ["A", "B", None],
+            "timestamp": ["2023-01-01 10:00", "2023-01-01 11:00", "2023-01-01 12:00"],
+        }
+    )
 
     llm = MockLLM()
 
     # Test Cleaning Agent
     agent = DataCleaningAgent(df, llm)
     profiling_report = {
-        'row_count': 3,
-        'columns': {'activity': {'nan': 1}},
-        'duplicates': 0
+        "row_count": 3,
+        "columns": {"activity": {"nan": 1}},
+        "duplicates": 0,
     }
 
     print("--- Testing Cleaning Agent Retry ---")
@@ -44,11 +46,13 @@ def test_retry_logic():
 
     # Test Discovery Agent
     print("\n--- Testing Discovery Agent Retry ---")
-    df_disc = pd.DataFrame({
-        'case': [1, 1, 2],
-        'activity': ['A', 'B', 'C'],
-        'timestamp': ['invalid', '2023-01-01 11:00', '2023-01-01 12:00']
-    })
+    df_disc = pd.DataFrame(
+        {
+            "case": [1, 1, 2],
+            "activity": ["A", "B", "C"],
+            "timestamp": ["invalid", "2023-01-01 11:00", "2023-01-01 12:00"],
+        }
+    )
     agent_disc = ProcessDiscoveryAgent(df_disc, llm)
 
     res1 = json.loads(agent_disc.run())
@@ -57,8 +61,12 @@ def test_retry_logic():
     res2 = json.loads(agent_disc.run())
     print(f"Run 2 activities: {res2.get('activities')}")
 
-    assert res1.get('activities') == 2, "Run 1 should have 2 activities (one row dropped due to invalid timestamp)"
-    assert res2.get('activities') == 2, "Run 2 should have 2 activities (retry worked on original df)"
+    assert res1.get("activities") == 2, (
+        "Run 1 should have 2 activities (one row dropped due to invalid timestamp)"
+    )
+    assert res2.get("activities") == 2, (
+        "Run 2 should have 2 activities (retry worked on original df)"
+    )
     assert len(df_disc) == 3, "Original df should remain unchanged"
     print("Discovery Agent Retry: SUCCESS")
 

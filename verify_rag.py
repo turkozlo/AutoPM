@@ -27,9 +27,13 @@ def test_rag():
     print(context)
 
     if "Loan Application" in context:
-        print("\n✅ Verification SUCCESS: RAG correctly retrieved 'Loan Application' for P101.")
+        print(
+            "\n✅ Verification SUCCESS: RAG correctly retrieved 'Loan Application' for P101."
+        )
     else:
-        print("\n❌ Verification FAILED: RAG did not retrieve the expected information.")
+        print(
+            "\n❌ Verification FAILED: RAG did not retrieve the expected information."
+        )
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 Safe Executor for Code Interpreter.
 Executes user-generated pandas code in a sandboxed environment.
 """
+
 import ast
 import signal
 import sys
@@ -30,13 +31,15 @@ def validate_code_syntax(code: str) -> Dict[str, Any]:
     except SyntaxError as e:
         return {
             "success": False,
-            "error": f"Синтаксическая ошибка: {e.msg} (строка {e.lineno}, столбец {e.offset})"
+            "error": f"Синтаксическая ошибка: {e.msg} (строка {e.lineno}, столбец {e.offset})",
         }
     except Exception as e:
         return {"success": False, "error": f"Ошибка валидации: {e}"}
 
 
-def execute_pandas_code(code: str, df: pd.DataFrame, timeout_seconds: int = 5) -> Dict[str, Any]:
+def execute_pandas_code(
+    code: str, df: pd.DataFrame, timeout_seconds: int = 5
+) -> Dict[str, Any]:
     """
     Executes pandas code in a restricted namespace.
 
@@ -73,14 +76,14 @@ def execute_pandas_code(code: str, df: pd.DataFrame, timeout_seconds: int = 5) -
         "set": set,
         "abs": abs,
         "print": lambda *args, **kwargs: None,  # Disable print
-        "__builtins__": {}  # Block dangerous builtins
+        "__builtins__": {},  # Block dangerous builtins
     }
 
     local_vars = {}
 
     try:
         # Set timeout (Unix only, skip on Windows)
-        if sys.platform != 'win32':
+        if sys.platform != "win32":
             signal.signal(signal.SIGALRM, timeout_handler)
             signal.alarm(timeout_seconds)
 
@@ -88,7 +91,7 @@ def execute_pandas_code(code: str, df: pd.DataFrame, timeout_seconds: int = 5) -
         exec(code, allowed_globals, local_vars)
 
         # Cancel timeout
-        if sys.platform != 'win32':
+        if sys.platform != "win32":
             signal.alarm(0)
 
         # Get result
@@ -97,7 +100,7 @@ def execute_pandas_code(code: str, df: pd.DataFrame, timeout_seconds: int = 5) -
         if result is None:
             return {
                 "success": False,
-                "error": "Код выполнен, но переменная 'result' не определена. Сохрани результат в переменную 'result'."
+                "error": "Код выполнен, но переменная 'result' не определена. Сохрани результат в переменную 'result'.",
             }
 
         # Convert result to JSON-serializable format
@@ -105,12 +108,14 @@ def execute_pandas_code(code: str, df: pd.DataFrame, timeout_seconds: int = 5) -
 
         # Check size limit (10KB)
         if len(result_str) > 10240:
-            result_str = result_str[:10000] + "\n... (обрезано, слишком большой результат)"
+            result_str = (
+                result_str[:10000] + "\n... (обрезано, слишком большой результат)"
+            )
 
         return {
             "success": True,
             "result": result_str,
-            "result_type": type(result).__name__
+            "result_type": type(result).__name__,
         }
 
     except TimeoutError as e:
@@ -118,11 +123,14 @@ def execute_pandas_code(code: str, df: pd.DataFrame, timeout_seconds: int = 5) -
     except SyntaxError as e:
         return {"success": False, "error": f"Синтаксическая ошибка: {e}"}
     except NameError as e:
-        return {"success": False, "error": f"Ошибка имени (возможно, используется недоступная функция): {e}"}
+        return {
+            "success": False,
+            "error": f"Ошибка имени (возможно, используется недоступная функция): {e}",
+        }
     except Exception as e:
         return {"success": False, "error": f"{type(e).__name__}: {e}"}
     finally:
-        if sys.platform != 'win32':
+        if sys.platform != "win32":
             signal.alarm(0)
 
 
@@ -149,8 +157,9 @@ def get_df_info_for_llm(df: pd.DataFrame) -> str:
     """Generates a concise DataFrame description for LLM context."""
     info_lines = [
         f"DataFrame: {len(df)} строк, {len(df.columns)} колонок",
-        f"Колонки: {', '.join(df.columns[:15])}" + ("..." if len(df.columns) > 15 else ""),
-        "Типы данных:"
+        f"Колонки: {', '.join(df.columns[:15])}"
+        + ("..." if len(df.columns) > 15 else ""),
+        "Типы данных:",
     ]
 
     for col in df.columns[:10]:

@@ -4,7 +4,11 @@ from pathlib import Path
 # Add project root to path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from pm_agent.safe_executor import execute_pandas_code, get_df_info_for_llm, validate_code_syntax
+from pm_agent.safe_executor import (
+    execute_pandas_code,
+    get_df_info_for_llm,
+    validate_code_syntax,
+)
 from pm_agent.rag import RAGManager
 from pm_agent.llm import LLMClient
 from pm_agent.data_processor import DataProcessor  # Used for loading only
@@ -26,7 +30,7 @@ import time
 import pandas as pd
 
 # Force UTF-8 for console output
-sys.stdout.reconfigure(encoding='utf-8')
+sys.stdout.reconfigure(encoding="utf-8")
 
 
 # Import Agents
@@ -44,11 +48,11 @@ def safe_input(prompt: str = "") -> str:
         sys.stdout.write(prompt)
         sys.stdout.flush()
 
-        if hasattr(sys.stdin, 'buffer'):
+        if hasattr(sys.stdin, "buffer"):
             # Read raw bytes and decode with error handling
             raw_bytes = sys.stdin.buffer.readline()
             # Decode with 'ignore' to silently drop invalid bytes
-            user_input = raw_bytes.decode('utf-8', errors='ignore').rstrip('\n\r')
+            user_input = raw_bytes.decode("utf-8", errors="ignore").rstrip("\n\r")
         else:
             # Fallback for environments without buffer access
             user_input = input()
@@ -63,7 +67,7 @@ def safe_input(prompt: str = "") -> str:
         return "exit"
     except Exception:
         try:
-            return input().encode('utf-8', errors='replace').decode('utf-8').strip()
+            return input().encode("utf-8", errors="replace").decode("utf-8").strip()
         except Exception:
             return ""
 
@@ -106,7 +110,11 @@ def run_tool_wrapper(tool_name: str, agent_func, llm: LLMClient, **kwargs):
             if isinstance(result, tuple):
                 result_str = result[0]
             else:
-                result_str = result if isinstance(result, str) else json.dumps(result, indent=2, ensure_ascii=False)
+                result_str = (
+                    result
+                    if isinstance(result, str)
+                    else json.dumps(result, indent=2, ensure_ascii=False)
+                )
 
         except Exception as e:
             result_str = str(f"Ошибка выполнения: {e}")
@@ -126,13 +134,17 @@ def run_tool_wrapper(tool_name: str, agent_func, llm: LLMClient, **kwargs):
         except (json.JSONDecodeError, TypeError):
             pass
 
-        print(f"   >>> Судья (Попытка {attempt}/{MAX_SAFE_RETRIES}): {'ПРИНЯТО' if passed else 'ОТКЛОНЕНО'} (Оценка: {score}).")
+        print(
+            f"   >>> Судья (Попытка {attempt}/{MAX_SAFE_RETRIES}): {'ПРИНЯТО' if passed else 'ОТКЛОНЕНО'} (Оценка: {score})."
+        )
         if not passed:
             print(f"   📝 Критика: {critique}")
 
         if passed or attempt == MAX_SAFE_RETRIES:
             if attempt == MAX_SAFE_RETRIES and not passed:
-                print(f"   ⚠️ Внимание: Достигнут лимит попыток ({MAX_SAFE_RETRIES}). Принимаем результат 'как есть'.")
+                print(
+                    f"   ⚠️ Внимание: Достигнут лимит попыток ({MAX_SAFE_RETRIES}). Принимаем результат 'как есть'."
+                )
             return result
 
         feedback = critique
@@ -155,8 +167,12 @@ def main():
     start_time = time.time()
     used_tools = set()
     parser = argparse.ArgumentParser(description="Process Mining AI Agent (ReAct)")
-    parser.add_argument("--file", type=str, required=True, help="Path to the log file (CSV)")
-    parser.add_argument("--rag-file", type=str, help="Path to the Excel file for RAG (optional)")
+    parser.add_argument(
+        "--file", type=str, required=True, help="Path to the log file (CSV)"
+    )
+    parser.add_argument(
+        "--rag-file", type=str, help="Path to the Excel file for RAG (optional)"
+    )
     args = parser.parse_args()
 
     # Setup Output
@@ -192,14 +208,16 @@ def main():
     if latest_session:
         print(f"\n🔍 Найдена предыдущая сессия: {latest_session}")
         choice = safe_input("Возобновить работу с ней? (y/n): ").lower()
-        if choice == 'y':
+        if choice == "y":
             resume_mode = True
             output_dir = latest_session
             print(f"📂 Загрузка состояния из {output_dir}...")
 
             # Load Memory
             try:
-                with open(os.path.join(output_dir, "memory.md"), "r", encoding="utf-8") as f:
+                with open(
+                    os.path.join(output_dir, "memory.md"), "r", encoding="utf-8"
+                ) as f:
                     memory = f.read()
                 print("✅ Память загружена.")
             except FileNotFoundError:
@@ -208,7 +226,9 @@ def main():
 
             # Load Final Report (for Context)
             try:
-                with open(os.path.join(output_dir, "final_report.md"), "r", encoding="utf-8") as f:
+                with open(
+                    os.path.join(output_dir, "final_report.md"), "r", encoding="utf-8"
+                ) as f:
                     final_report_content = f.read()
                 print("✅ Финальный отчет загружен.")
             except FileNotFoundError:
@@ -322,18 +342,23 @@ def main():
                     if tool_name == "Data Profiling":
                         agent = DataProfilingAgent(current_df.copy(), llm)
                         res_json = run_tool_wrapper(tool_name, agent.run, llm)
-                        artifacts['profiling'] = json.loads(res_json)
+                        artifacts["profiling"] = json.loads(res_json)
                         current_step_result_str = (
                             f"Data Profiling completed. Readiness: "
                             f"{artifacts['profiling'].get('process_mining_readiness', {}).get('level')}"
                         )
 
                     elif tool_name == "Data Cleaning":
-                        if 'profiling' not in artifacts:
+                        if "profiling" not in artifacts:
                             raise ValueError("Requires Profiling first")
                         agent = DataCleaningAgent(current_df.copy(), llm)
                         # Cleaning returns tuple (report, new_df)
-                        res = run_tool_wrapper(tool_name, agent.run, llm, profiling_report=artifacts['profiling'])
+                        res = run_tool_wrapper(
+                            tool_name,
+                            agent.run,
+                            llm,
+                            profiling_report=artifacts["profiling"],
+                        )
 
                         clean_report_json = ""
                         if isinstance(res, tuple):
@@ -342,39 +367,67 @@ def main():
                         else:
                             clean_report_json = res
 
-                        artifacts['cleaning'] = json.loads(clean_report_json)
-                        current_step_result_str = "Data Cleaning completed. DataFrame updated."
+                        artifacts["cleaning"] = json.loads(clean_report_json)
+                        current_step_result_str = (
+                            "Data Cleaning completed. DataFrame updated."
+                        )
 
                     elif tool_name == "Visualization":
-                        if 'profiling' not in artifacts:
-                            raise ValueError("Requires Profiling first for column detection")
+                        if "profiling" not in artifacts:
+                            raise ValueError(
+                                "Requires Profiling first for column detection"
+                            )
                         agent = VisualizationAgent(current_df.copy(), llm)
-                        res_json = run_tool_wrapper(tool_name, agent.run, llm, profiling_report=artifacts['profiling'], output_dir=output_dir)
-                        artifacts['visualization'] = json.loads(res_json)
-                        current_step_result_str = "Visualization completed. 4 charts generated."
+                        res_json = run_tool_wrapper(
+                            tool_name,
+                            agent.run,
+                            llm,
+                            profiling_report=artifacts["profiling"],
+                            output_dir=output_dir,
+                        )
+                        artifacts["visualization"] = json.loads(res_json)
+                        current_step_result_str = (
+                            "Visualization completed. 4 charts generated."
+                        )
 
                     elif tool_name == "Process Discovery":
                         agent = ProcessDiscoveryAgent(current_df.copy(), llm)
                         # Pass output_dir
-                        res_json = run_tool_wrapper(tool_name, agent.run, llm, pm_columns=None, output_dir=output_dir)
-                        artifacts['discovery'] = json.loads(res_json)
+                        res_json = run_tool_wrapper(
+                            tool_name,
+                            agent.run,
+                            llm,
+                            pm_columns=None,
+                            output_dir=output_dir,
+                        )
+                        artifacts["discovery"] = json.loads(res_json)
                         current_step_result_str = f"Process Discovery completed. Found {artifacts['discovery'].get('activities')} activities."
 
                     elif tool_name == "Process Analysis":
-                        if 'discovery' not in artifacts:
+                        if "discovery" not in artifacts:
                             raise ValueError("Requires Discovery first (PM columns)")
-                        confirmed_pm_cols = artifacts['discovery'].get('pm_columns')
+                        confirmed_pm_cols = artifacts["discovery"].get("pm_columns")
                         agent = ProcessAnalysisAgent(current_df.copy(), llm)
-                        res_json = run_tool_wrapper(tool_name, agent.run, llm, pm_columns=confirmed_pm_cols, output_dir=output_dir)
-                        artifacts['analysis'] = json.loads(res_json)
+                        res_json = run_tool_wrapper(
+                            tool_name,
+                            agent.run,
+                            llm,
+                            pm_columns=confirmed_pm_cols,
+                            output_dir=output_dir,
+                        )
+                        artifacts["analysis"] = json.loads(res_json)
                         current_step_result_str = "Process Analysis completed. Performance metrics calculated."
 
                     elif tool_name == "Reporting":
                         if not artifacts:
-                            current_step_result_str = "Reporting failed: No artifacts to report."
+                            current_step_result_str = (
+                                "Reporting failed: No artifacts to report."
+                            )
                         else:
                             agent = ReportAgent(llm)
-                            final_report_content = run_tool_wrapper(tool_name, agent.run, llm, artifacts=artifacts)
+                            final_report_content = run_tool_wrapper(
+                                tool_name, agent.run, llm, artifacts=artifacts
+                            )
 
                             report_path = os.path.join(output_dir, "final_report.md")
                             with open(report_path, "w", encoding="utf-8") as f:
@@ -392,7 +445,9 @@ def main():
                         print("❌ Неизвестный инструмент.")
 
                     # Store raw output for cumulative judging
-                    cumulative_outputs.append(f"Step {step_count}: {tool_name}\nResult:\n{current_step_result_str}")
+                    cumulative_outputs.append(
+                        f"Step {step_count}: {tool_name}\nResult:\n{current_step_result_str}"
+                    )
 
                 except Exception as e:
                     err_msg = f"Error executing {tool_name}: {e}"
@@ -404,13 +459,17 @@ def main():
                 memory = llm.update_memory(memory, tool_name, current_step_result_str)
 
                 # Save memory trace
-                with open(os.path.join(output_dir, "memory.md"), "w", encoding="utf-8") as f:
+                with open(
+                    os.path.join(output_dir, "memory.md"), "w", encoding="utf-8"
+                ) as f:
                     f.write(memory)
 
                 # 4. Global Cumulative Step Evaluation
                 print("\n⚖️ ГЛОБАЛЬНАЯ ОЦЕНКА ПРОГРЕССА СЕССИИ...")
                 cumulative_context = "\n---\n".join(cumulative_outputs)
-                judge_verdict = llm.judge_cumulative_progress(memory, len(artifacts), cumulative_context)
+                judge_verdict = llm.judge_cumulative_progress(
+                    memory, len(artifacts), cumulative_context
+                )
                 global_passed = judge_verdict.get("passed", False)
                 critique = judge_verdict.get("critique", "Нет замечаний")
 
@@ -447,7 +506,9 @@ def main():
         # --- Interactive QA Mode ---
         print("\n=========================================")
         print("💬 РЕЖИМ КОНСУЛЬТАЦИИ")
-        print("Теперь вы можете задать вопросы по обработанному датасету. Контекст диалога сохраняется.")
+        print(
+            "Теперь вы можете задать вопросы по обработанному датасету. Контекст диалога сохраняется."
+        )
         print("Введите вопрос или 'exit' для выхода.")
         print("=========================================\n")
 
@@ -457,7 +518,7 @@ def main():
         while True:
             try:
                 user_input = safe_input("\n👤 Ваш вопрос: ")
-                if user_input.lower() in ['exit', 'quit', 'выход']:
+                if user_input.lower() in ["exit", "quit", "выход"]:
                     print("🏁 Завершение работы. До свидания!")
                     print_used_tools(used_tools)
                     break
@@ -469,10 +530,16 @@ def main():
 
                 # Context Window Management (Sliding Window)
                 MAX_CHAT_CONTEXT = 20  # Keep last 20 messages
-                recent_history = chat_history[-MAX_CHAT_CONTEXT:] if len(chat_history) > MAX_CHAT_CONTEXT else chat_history
+                recent_history = (
+                    chat_history[-MAX_CHAT_CONTEXT:]
+                    if len(chat_history) > MAX_CHAT_CONTEXT
+                    else chat_history
+                )
 
                 # Convert history to string
-                history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+                history_str = "\n".join(
+                    [f"{msg['role']}: {msg['content']}" for msg in recent_history]
+                )
 
                 # Read Knowledge Base
                 kb_path = os.path.join(output_dir, "knowledge_base.md")
@@ -483,7 +550,14 @@ def main():
 
                 # Get Answer with potential Tool Use
                 tools_desc = get_tools_description() if current_df is not None else ""
-                response_data = llm.answer_user_question(memory, final_report_content, history_str, user_input, knowledge_base_content, tools_desc)
+                response_data = llm.answer_user_question(
+                    memory,
+                    final_report_content,
+                    history_str,
+                    user_input,
+                    knowledge_base_content,
+                    tools_desc,
+                )
 
                 answer_text = None
 
@@ -495,11 +569,15 @@ def main():
                     tool_name = tool_call.get("name")
                     tool_args = tool_call.get("args", {})
                     used_tools.add(tool_name)
-                    print(f"🔧 Вызов инструмента: {tool_name} (аргументы: {json.dumps(tool_args, ensure_ascii=False)})")
+                    print(
+                        f"🔧 Вызов инструмента: {tool_name} (аргументы: {json.dumps(tool_args, ensure_ascii=False)})"
+                    )
 
                     # PROACTIVE ROUTER: If agent asks for complex analysis, skip direct execution and go to code
                     if tool_name == "run_complex_analysis":
-                        print("🚀 Агент выбрал 'run_complex_analysis' — сразу запускаем Code Interpreter для сложной задачи.")
+                        print(
+                            "🚀 Агент выбрал 'run_complex_analysis' — сразу запускаем Code Interpreter для сложной задачи."
+                        )
                         needs_code = True
                         tool_result = {"status": "skipped_for_code"}  # Dummy result
                     else:
@@ -524,35 +602,73 @@ def main():
                         is_valid = verification.get("is_valid", True)
 
                         if is_valid is False:
-                            print(f"🤔 Самопроверка: ответ кажется некорректным. {verification.get('critique')}")
+                            print(
+                                f"🤔 Самопроверка: ответ кажется некорректным. {verification.get('critique')}"
+                            )
                             print(f"💡 Совет: {verification.get('suggestion')}")
-                            print("🔄 Результат инструмента не устраивает. Переключаюсь на Code Interpreter для точного решения...")
+                            print(
+                                "🔄 Результат инструмента не устраивает. Переключаюсь на Code Interpreter для точного решения..."
+                            )
                             needs_code = True
-                            answer_text = None  # Reset answer so it drops through to CI block
+                            answer_text = (
+                                None  # Reset answer so it drops through to CI block
+                            )
                         else:
                             if is_valid == "partial":
-                                print(f"⚠️ Ответ принят с оговорками (Partial Success): {verification.get('critique')}")
+                                print(
+                                    f"⚠️ Ответ принят с оговорками (Partial Success): {verification.get('critique')}"
+                                )
 
-                            print(f"📊 Результат инструмента: {json.dumps(tool_result, ensure_ascii=False, indent=2)}")
-                            followup_data = llm.interpret_tool_result(user_input, tool_result)
+                            print(
+                                f"📊 Результат инструмента: {json.dumps(tool_result, ensure_ascii=False, indent=2)}"
+                            )
+                            followup_data = llm.interpret_tool_result(
+                                user_input, tool_result
+                            )
                             answer_text = followup_data.get("answer", str(tool_result))
 
                             # DOUBLE SAFETY: If answer admits failure, force fallback
-                            failure_triggers = ["не вижу", "нет нужных данных", "вернул только"]
-                            if any(trigger in answer_text.lower() for trigger in failure_triggers):
-                                print(f"🚨 Интерпретатор обнаружил нехватку данных: '{answer_text}'")
-                                print("🔄 Переключаюсь на Code Interpreter для точного решения...")
+                            failure_triggers = [
+                                "не вижу",
+                                "нет нужных данных",
+                                "вернул только",
+                            ]
+                            if any(
+                                trigger in answer_text.lower()
+                                for trigger in failure_triggers
+                            ):
+                                print(
+                                    f"🚨 Интерпретатор обнаружил нехватку данных: '{answer_text}'"
+                                )
+                                print(
+                                    "🔄 Переключаюсь на Code Interpreter для точного решения..."
+                                )
                                 needs_code = True
                                 answer_text = None
 
                 # Code Interpreter fallback (dynamic pandas execution)
                 if (needs_code or answer_text is None) and current_df is not None:
                     # Check if this looks like a calculation question
-                    calc_keywords = ["сколько", "какой процент", "посчитай", "вычисли", "найди",
-                                     "покажи", "подсчитай", "среднее", "медиана", "топ", "редкий", "частый"]
+                    calc_keywords = [
+                        "сколько",
+                        "какой процент",
+                        "посчитай",
+                        "вычисли",
+                        "найди",
+                        "покажи",
+                        "подсчитай",
+                        "среднее",
+                        "медиана",
+                        "топ",
+                        "редкий",
+                        "частый",
+                    ]
 
                     # Force checks if explicit tool failure requested code
-                    is_calc_question = any(kw in user_input.lower() for kw in calc_keywords) or needs_code
+                    is_calc_question = (
+                        any(kw in user_input.lower() for kw in calc_keywords)
+                        or needs_code
+                    )
 
                     if is_calc_question:
                         print("🧠 Запуск Code Interpreter...")
@@ -567,9 +683,11 @@ def main():
                             context = {
                                 "knowledge_base": knowledge_base_content,
                                 "memory": memory,
-                                "final_report": final_report_content
+                                "final_report": final_report_content,
                             }
-                            code_response = llm.generate_pandas_code(user_input, df_info, previous_error, context=context)
+                            code_response = llm.generate_pandas_code(
+                                user_input, df_info, previous_error, context=context
+                            )
                             thought = code_response.get("thought", "")
                             code = code_response.get("code", "")
 
@@ -579,18 +697,26 @@ def main():
                             # 1. Validate Code Syntax
                             validation = validate_code_syntax(code)
                             if not validation["success"]:
-                                print(f"⚠️ Найдена синтаксическая ошибка: {validation['error']}")
+                                print(
+                                    f"⚠️ Найдена синтаксическая ошибка: {validation['error']}"
+                                )
                                 previous_error = validation["error"]
                                 if attempt == MAX_CODE_ATTEMPTS - 1:
                                     answer_text = f"Не удалось сгенерировать корректный код. Ошибка: {previous_error}"
                                 continue
 
                             # 2. User Confirmation
-                            print("\n⚠️ ВНИМАНИЕ: Агент сгенерировал код для выполнения.")
-                            confirm = safe_input("Нажмите Enter для выполнения или любой текст для отмены: ")
+                            print(
+                                "\n⚠️ ВНИМАНИЕ: Агент сгенерировал код для выполнения."
+                            )
+                            confirm = safe_input(
+                                "Нажмите Enter для выполнения или любой текст для отмены: "
+                            )
                             if confirm:
                                 print("🚫 Выполнение отменено пользователем.")
-                                answer_text = "Выполнение кода было отменено пользователем."
+                                answer_text = (
+                                    "Выполнение кода было отменено пользователем."
+                                )
                                 break
 
                             # 3. Execute code
@@ -600,35 +726,57 @@ def main():
                                 print(f"✅ Результат: {exec_result['result']}")
 
                                 # VERIFY Code Result
-                                verification = llm.verify_result(user_input, exec_result['result'])
+                                verification = llm.verify_result(
+                                    user_input, exec_result["result"]
+                                )
                                 if verification.get("is_valid", True) is False:
-                                    print(f"🤔 Самопроверка кода: {verification.get('critique')}")
+                                    print(
+                                        f"🤔 Самопроверка кода: {verification.get('critique')}"
+                                    )
                                     previous_error = (
                                         f"Результат был получен, но он некорректен: {verification.get('critique')}. "
                                         f"{verification.get('suggestion')}"
                                     )
                                     # Fallback: Store result just in case we run out of retries
                                     if attempt == MAX_CODE_ATTEMPTS - 1:
-                                        print("⚠️ Исчерпаны попытки исправления. Использую последний полученный результат (лучшее из возможного).")
+                                        print(
+                                            "⚠️ Исчерпаны попытки исправления. Использую последний полученный результат (лучшее из возможного)."
+                                        )
                                         # Use interpret_code_result manually here to break loop with success
-                                        followup_data = llm.interpret_code_result(user_input, exec_result["result"], "pandas_output")
-                                        answer_text = followup_data.get("answer", str(exec_result["result"]))
+                                        followup_data = llm.interpret_code_result(
+                                            user_input,
+                                            exec_result["result"],
+                                            "pandas_output",
+                                        )
+                                        answer_text = followup_data.get(
+                                            "answer", str(exec_result["result"])
+                                        )
                                         break
                                     continue  # Retry loop
 
                                 # Interpret result
-                                interp = llm.interpret_code_result(user_input, exec_result["result"], exec_result["result_type"])
-                                answer_text = interp.get("answer", exec_result["result"])
+                                interp = llm.interpret_code_result(
+                                    user_input,
+                                    exec_result["result"],
+                                    exec_result["result_type"],
+                                )
+                                answer_text = interp.get(
+                                    "answer", exec_result["result"]
+                                )
                                 break
                             else:
                                 previous_error = exec_result["error"]
-                                print(f"❌ Ошибка (попытка {attempt+1}/{MAX_CODE_ATTEMPTS}): {previous_error}")
+                                print(
+                                    f"❌ Ошибка (попытка {attempt + 1}/{MAX_CODE_ATTEMPTS}): {previous_error}"
+                                )
                                 if attempt == MAX_CODE_ATTEMPTS - 1:
                                     answer_text = f"Не удалось выполнить код после {MAX_CODE_ATTEMPTS} попыток. Последняя ошибка: {previous_error}"
 
                 # Fallback to direct answer
                 if answer_text is None:
-                    answer_text = response_data.get("answer", "Не могу ответить на этот вопрос.")
+                    answer_text = response_data.get(
+                        "answer", "Не могу ответить на этот вопрос."
+                    )
 
                 knowledge_update = response_data.get("knowledge_update")
 
@@ -640,19 +788,27 @@ def main():
                     with open(kb_path, "a", encoding="utf-8") as f:
                         f.write(f"\n- **User Insight**: {knowledge_update}")
                     # In-memory update for this loop iteration
-                    knowledge_base_content += f"\n- **User Insight**: {knowledge_update}"
+                    knowledge_base_content += (
+                        f"\n- **User Insight**: {knowledge_update}"
+                    )
 
                 # Update History
                 chat_history.append({"role": "User", "content": user_input})
                 chat_history.append({"role": "Assistant", "content": answer_text})
 
                 # Persist Chat History (JSON)
-                with open(os.path.join(output_dir, "chat_history.json"), "w", encoding="utf-8") as f:
+                with open(
+                    os.path.join(output_dir, "chat_history.json"), "w", encoding="utf-8"
+                ) as f:
                     json.dump(chat_history, f, ensure_ascii=False, indent=2)
 
                 # Persist Chat Log (Markdown)
-                with open(os.path.join(output_dir, "chat_log.md"), "a", encoding="utf-8") as f:
-                    f.write(f"**User**: {user_input}\n\n**Assistant**: {answer_text}\n\n---\n\n")
+                with open(
+                    os.path.join(output_dir, "chat_log.md"), "a", encoding="utf-8"
+                ) as f:
+                    f.write(
+                        f"**User**: {user_input}\n\n**Assistant**: {answer_text}\n\n---\n\n"
+                    )
 
             except KeyboardInterrupt:
                 print("\n🏁 Завершение работы.")

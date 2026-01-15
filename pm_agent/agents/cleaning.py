@@ -30,19 +30,22 @@ class DataCleaningAgent:
         )
 
         # Filter profile to only show columns with issues
-        issues = {k: v for k, v in profiling_report['columns'].items() if v['nan'] > 0}
-        duplicates = profiling_report.get('duplicates', 0)
+        issues = {k: v for k, v in profiling_report["columns"].items() if v["nan"] > 0}
+        duplicates = profiling_report.get("duplicates", 0)
 
         if not issues and duplicates == 0:
-            return json.dumps({
-                "rows_before": profiling_report['row_count'],
-                "rows_after": profiling_report['row_count'],
-                "rows_removed": 0,
-                "removed_by_column": {},
-                "duplicates_removed": 0,
-                "fill_actions": [],
-                "message": "Data is clean. No cleaning needed."
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "rows_before": profiling_report["row_count"],
+                    "rows_after": profiling_report["row_count"],
+                    "rows_removed": 0,
+                    "removed_by_column": {},
+                    "duplicates_removed": 0,
+                    "fill_actions": [],
+                    "message": "Data is clean. No cleaning needed.",
+                },
+                ensure_ascii=False,
+            )
 
         prompt = f"Data Profile (Issues only):\n{json.dumps(issues, indent=2)}\nDuplicates: {duplicates}"
         if feedback:
@@ -123,12 +126,16 @@ class DataCleaningAgent:
                         applied_funcs.append("df.fillna()")
                     if func_used and func_used not in applied_funcs:
                         applied_funcs.append(func_used)
-                    fill_actions.append({
-                        "column": col,
-                        "action": act,
-                        "value": str(val) if not isinstance(val, (int, float)) else float(round(val, 2)),
-                        "reason": reason
-                    })
+                    fill_actions.append(
+                        {
+                            "column": col,
+                            "action": act,
+                            "value": str(val)
+                            if not isinstance(val, (int, float))
+                            else float(round(val, 2)),
+                            "reason": reason,
+                        }
+                    )
 
         final_rows = len(df)
         if not applied_funcs:
@@ -141,7 +148,9 @@ class DataCleaningAgent:
         rows_removed = initial_rows - final_rows
 
         # Explicitly mention alignment with profiling recommendations
-        reasoning.append("План очистки составлен в строгом соответствии с рекомендациями этапа профилирования.")
+        reasoning.append(
+            "План очистки составлен в строгом соответствии с рекомендациями этапа профилирования."
+        )
 
         if rows_removed > 0:
             removed_cols = ", ".join(removed_by_column.keys())
@@ -157,7 +166,9 @@ class DataCleaningAgent:
             )
 
         if fill_actions:
-            filled_funcs = ', '.join([f for f in applied_funcs if 'fill' in f or 'mean' in f or 'mode' in f])
+            filled_funcs = ", ".join(
+                [f for f in applied_funcs if "fill" in f or "mean" in f or "mode" in f]
+            )
             reasoning.append(
                 f"Заполнено {len(fill_actions)} типов пропусков (использованы {filled_funcs}) "
                 "для сохранения объема выборки."
@@ -180,10 +191,15 @@ class DataCleaningAgent:
 
         # --- Outlier Removal (IQR Method, <5% threshold) ---
         outlier_report = []
-        numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+        numeric_cols = df.select_dtypes(include=["int64", "float64"]).columns
 
         for col in numeric_cols:
-            if col.lower() in ['id', 'case_id', 'global_id', 'row_id']:  # Skip ID columns
+            if col.lower() in [
+                "id",
+                "case_id",
+                "global_id",
+                "row_id",
+            ]:  # Skip ID columns
                 continue
 
             Q1 = df[col].quantile(0.25)
@@ -202,23 +218,29 @@ class DataCleaningAgent:
 
             if outlier_count > 0 and outlier_ratio < 0.05:  # Less than 5%
                 df = df[~outlier_mask]
-                outlier_report.append({
-                    "column": col,
-                    "outliers_removed": int(outlier_count),
-                    "percentage": round(outlier_ratio * 100, 2)
-                })
+                outlier_report.append(
+                    {
+                        "column": col,
+                        "outliers_removed": int(outlier_count),
+                        "percentage": round(outlier_ratio * 100, 2),
+                    }
+                )
                 if "Outlier Removal (IQR)" not in applied_funcs:
                     applied_funcs.append("Outlier Removal (IQR)")
             elif outlier_count > 0:
-                outlier_report.append({
-                    "column": col,
-                    "outliers_detected": int(outlier_count),
-                    "percentage": round(outlier_ratio * 100, 2),
-                    "action": "KEPT (>5% of data)"
-                })
+                outlier_report.append(
+                    {
+                        "column": col,
+                        "outliers_detected": int(outlier_count),
+                        "percentage": round(outlier_ratio * 100, 2),
+                        "action": "KEPT (>5% of data)",
+                    }
+                )
 
         final_rows_after_outliers = len(df)
-        total_outliers_removed = sum([r.get('outliers_removed', 0) for r in outlier_report])
+        total_outliers_removed = sum(
+            [r.get("outliers_removed", 0) for r in outlier_report]
+        )
 
         result = {
             "rows_before": initial_rows,
@@ -230,8 +252,9 @@ class DataCleaningAgent:
             "outliers_removed": total_outliers_removed,
             "outlier_report": outlier_report,
             "fill_actions": fill_actions,
-            "thoughts": cleaning_summary + f" Outliers: {total_outliers_removed} removed (IQR method, <5% rule).",
-            "applied_functions": applied_funcs
+            "thoughts": cleaning_summary
+            + f" Outliers: {total_outliers_removed} removed (IQR method, <5% rule).",
+            "applied_functions": applied_funcs,
         }
 
         return json.dumps(result, indent=2, ensure_ascii=False), df

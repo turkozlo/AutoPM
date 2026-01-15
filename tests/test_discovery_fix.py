@@ -23,9 +23,9 @@ def test_discovery_fix():
 
     # 1. Create a mock dataframe that mimics pm4py-formatted data (which might have caused issues)
     data = {
-        'case:concept:name': ['C1', 'C1', 'C2'],
-        'concept:name': ['A', 'B', 'A'],
-        'time:timestamp': ['2023-01-01 10:00', '2023-01-01 11:00', '2023-01-01 12:00']
+        "case:concept:name": ["C1", "C1", "C2"],
+        "concept:name": ["A", "B", "A"],
+        "time:timestamp": ["2023-01-01 10:00", "2023-01-01 11:00", "2023-01-01 12:00"],
     }
     df = pd.DataFrame(data)
 
@@ -34,16 +34,16 @@ def test_discovery_fix():
     # 2. Run VisualizationAgent (should not modify original df)
     print("Testing VisualizationAgent isolation...")
     profiling_report = {
-        'process_mining_readiness': {
-            'activity_candidates': ['concept:name'],
-            'timestamp_candidates': ['time:timestamp'],
-            'case_id_candidates': ['case:concept:name']
+        "process_mining_readiness": {
+            "activity_candidates": ["concept:name"],
+            "timestamp_candidates": ["time:timestamp"],
+            "case_id_candidates": ["case:concept:name"],
         },
-        'columns': {
-            'concept:name': {'dtype': 'object'},
-            'time:timestamp': {'dtype': 'object'},
-            'case:concept:name': {'dtype': 'object'}
-        }
+        "columns": {
+            "concept:name": {"dtype": "object"},
+            "time:timestamp": {"dtype": "object"},
+            "case:concept:name": {"dtype": "object"},
+        },
     }
 
     vis_agent = VisualizationAgent(df, llm)
@@ -68,19 +68,23 @@ def test_discovery_fix():
 
     # 4. Test with string dates that need conversion
     print("Testing ProcessDiscoveryAgent with string dates...")
-    df_str = pd.DataFrame({
-        'case': ['1', '1', '2'],
-        'act': ['Start', 'End', 'Start'],
-        'dt': ['2023-01-01', '2023-01-02', '2023-01-01']
-    })
+    df_str = pd.DataFrame(
+        {
+            "case": ["1", "1", "2"],
+            "act": ["Start", "End", "Start"],
+            "dt": ["2023-01-01", "2023-01-02", "2023-01-01"],
+        }
+    )
     discovery_agent_str = ProcessDiscoveryAgent(df_str, llm)
     # Mock LLM will return standard names, but fallback should handle it or we pass them
-    pm_cols = {'case_id': 'case', 'activity': 'act', 'timestamp': 'dt'}
+    pm_cols = {"case_id": "case", "activity": "act", "timestamp": "dt"}
     result_json_str = discovery_agent_str.run(pm_columns=pm_cols, output_dir="reports")
 
     result_str = json.loads(result_json_str)
     if "error" in result_str:
-        print(f"FAILED: Discovery with string dates returned error: {result_str['error']}")
+        print(
+            f"FAILED: Discovery with string dates returned error: {result_str['error']}"
+        )
         sys.exit(1)
 
     print("SUCCESS: Discovery with string dates completed.")
@@ -88,11 +92,18 @@ def test_discovery_fix():
     # 5. Test ProcessAnalysisAgent
     print("Testing ProcessAnalysisAgent...")
     from pm_agent.agents.analysis import ProcessAnalysisAgent
+
     analysis_agent = ProcessAnalysisAgent(df, llm)
     # df is already formatted by DiscoveryAgent in the actual pipeline,
     # but here we test if it handles the same columns.
-    analysis_json = analysis_agent.run(pm_columns={'case_id': 'case:concept:name', 'activity': 'concept:name',
-                                       'timestamp': 'time:timestamp'}, output_dir="reports")
+    analysis_json = analysis_agent.run(
+        pm_columns={
+            "case_id": "case:concept:name",
+            "activity": "concept:name",
+            "timestamp": "time:timestamp",
+        },
+        output_dir="reports",
+    )
 
     analysis_res = json.loads(analysis_json)
     if "error" in analysis_res:
@@ -103,19 +114,26 @@ def test_discovery_fix():
 
     # 6. Test with Duplicate Column Names
     print("Testing with duplicate column names...")
-    df_dup = pd.DataFrame([
-        ['C1', 'A', '2023-01-01', 'Extra'],
-        ['C1', 'B', '2023-01-02', 'Extra'],
-        ['C2', 'A', '2023-01-01', 'Extra']
-    ], columns=['case', 'act', 'dt', 'dt'])  # Two 'dt' columns
+    df_dup = pd.DataFrame(
+        [
+            ["C1", "A", "2023-01-01", "Extra"],
+            ["C1", "B", "2023-01-02", "Extra"],
+            ["C2", "A", "2023-01-01", "Extra"],
+        ],
+        columns=["case", "act", "dt", "dt"],
+    )  # Two 'dt' columns
 
     discovery_agent_dup = ProcessDiscoveryAgent(df_dup, llm)
-    pm_cols_dup = {'case_id': 'case', 'activity': 'act', 'timestamp': 'dt'}
-    result_json_dup = discovery_agent_dup.run(pm_columns=pm_cols_dup, output_dir="reports")
+    pm_cols_dup = {"case_id": "case", "activity": "act", "timestamp": "dt"}
+    result_json_dup = discovery_agent_dup.run(
+        pm_columns=pm_cols_dup, output_dir="reports"
+    )
 
     result_dup = json.loads(result_json_dup)
     if "error" in result_dup:
-        print(f"FAILED: Discovery with duplicate columns returned error: {result_dup['error']}")
+        print(
+            f"FAILED: Discovery with duplicate columns returned error: {result_dup['error']}"
+        )
         sys.exit(1)
 
     print("SUCCESS: Discovery with duplicate columns completed.")

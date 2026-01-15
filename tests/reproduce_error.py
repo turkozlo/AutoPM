@@ -1,4 +1,3 @@
-
 import numpy as np
 import pandas as pd
 
@@ -32,7 +31,7 @@ def test_ambiguous_truth():
 
     # Case 4: if df.empty:
     try:
-        df = pd.DataFrame({'a': [1]})
+        df = pd.DataFrame({"a": [1]})
         if df.empty:
             print("if df.empty passed")
         else:

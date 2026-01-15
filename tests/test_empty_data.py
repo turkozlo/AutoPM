@@ -17,12 +17,12 @@ class MockLLM:
         if "candidates" in prompt.lower():
             return '{"process_mining_readiness": {"score": 0, "case_id_candidates": ["A"], "activity_candidates": ["B"], "timestamp_candidates": ["C"]}, "thoughts": "Mock"}'
         if "plan" in prompt.lower() or "candidates" in system_prompt.lower():
-            return '[]'
+            return "[]"
         return "Mock Interpretation"
 
 
 def test_empty_data():
-    df = pd.DataFrame(columns=['A', 'B', 'C'])
+    df = pd.DataFrame(columns=["A", "B", "C"])
     llm = MockLLM()
     output_dir = "test_empty_output"
     if not os.path.exists(output_dir):
@@ -35,26 +35,40 @@ def test_empty_data():
 
     print("\n--- Testing Discovery ---")
     agent = ProcessDiscoveryAgent(df, llm)
-    res = agent.run(pm_columns={'case_id': 'A', 'activity': 'B', 'timestamp': 'C'}, output_dir=output_dir)
+    res = agent.run(
+        pm_columns={"case_id": "A", "activity": "B", "timestamp": "C"},
+        output_dir=output_dir,
+    )
     print(res)
 
     print("\n--- Testing Visualization ---")
     agent = VisualizationAgent(df, llm)
     # VisualizationAgent.run needs a profiling report
     report = {
-        "process_mining_readiness": {"case_id_candidates": ["A"], "activity_candidates": ["B"], "timestamp_candidates": ["C"]},
-        "columns": {"A": {"dtype": "int", "nan": 0, "unique": 0}, "B": {"dtype": "object", "nan": 0, "unique": 0}, "C": {"dtype": "datetime64[ns]", "nan": 0, "unique": 0}}
+        "process_mining_readiness": {
+            "case_id_candidates": ["A"],
+            "activity_candidates": ["B"],
+            "timestamp_candidates": ["C"],
+        },
+        "columns": {
+            "A": {"dtype": "int", "nan": 0, "unique": 0},
+            "B": {"dtype": "object", "nan": 0, "unique": 0},
+            "C": {"dtype": "datetime64[ns]", "nan": 0, "unique": 0},
+        },
     }
     res = agent.run(report, output_dir=output_dir)
     print(res)
 
     print("\n--- Testing Analysis ---")
     agent = ProcessAnalysisAgent(df, llm)
-    res = agent.run(pm_columns={'case_id': 'A', 'activity': 'B', 'timestamp': 'C'}, output_dir=output_dir)
+    res = agent.run(
+        pm_columns={"case_id": "A", "activity": "B", "timestamp": "C"},
+        output_dir=output_dir,
+    )
     print(res)
 
     # Check for png files
-    pngs = [f for f in os.listdir(output_dir) if f.endswith('.png')]
+    pngs = [f for f in os.listdir(output_dir) if f.endswith(".png")]
     print(f"\nCreated images: {pngs}")
     if pngs:
         print("FAILED: Images were created on empty data!")

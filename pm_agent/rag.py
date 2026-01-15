@@ -8,7 +8,9 @@ from sentence_transformers import SentenceTransformer
 
 
 class RAGManager:
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2", local_model_path: str = None):
+    def __init__(
+        self, model_name: str = "all-MiniLM-L6-v2", local_model_path: str = None
+    ):
         """
         Initialize RAG Manager.
         :param model_name: Name of the SentenceTransformer model.
@@ -24,6 +26,7 @@ class RAGManager:
 
         # Auto-detect device (GPU/CPU)
         import torch
+
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Using device: {self.device}")
 
@@ -51,15 +54,15 @@ class RAGManager:
             description = str(row.get("Description", ""))
 
             # Combine for indexing
-            text_to_index = f"ID: {proc_id} | Name: {proc_name} | Description: {description}"
+            text_to_index = (
+                f"ID: {proc_id} | Name: {proc_name} | Description: {description}"
+            )
             self.documents.append(text_to_index)
 
             # Store metadata for retrieval
-            self.metadata.append({
-                "id": proc_id,
-                "name": proc_name,
-                "description": description
-            })
+            self.metadata.append(
+                {"id": proc_id, "name": proc_name, "description": description}
+            )
 
         print(f"Loaded {len(self.documents)} documents from {file_path}")
         self._initialize_index()
@@ -74,7 +77,7 @@ class RAGManager:
         dimension = embeddings.shape[1]
 
         self.index = faiss.IndexFlatL2(dimension)
-        self.index.add(np.array(embeddings).astype('float32'))
+        self.index.add(np.array(embeddings).astype("float32"))
         print("FAISS index initialized.")
 
     def query(self, text: str, top_k: int = 3) -> List[Dict[str, Any]]:
@@ -85,7 +88,9 @@ class RAGManager:
             return []
 
         query_embedding = self.model.encode([text])
-        distances, indices = self.index.search(np.array(query_embedding).astype('float32'), top_k)
+        distances, indices = self.index.search(
+            np.array(query_embedding).astype("float32"), top_k
+        )
 
         results = []
         for i, idx in enumerate(indices[0]):
@@ -104,7 +109,9 @@ class RAGManager:
 
         context_lines = ["=== RELEVANT PROCESS INFORMATION (RAG) ==="]
         for res in results:
-            context_lines.append(f"- ID: {res['id']}, Name: {res['name']}, Description: {res['description']}")
+            context_lines.append(
+                f"- ID: {res['id']}, Name: {res['name']}, Description: {res['description']}"
+            )
         context_lines.append("=== END OF RAG CONTEXT ===")
 
         return "\n".join(context_lines)

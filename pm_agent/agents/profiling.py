@@ -26,7 +26,7 @@ class DataProfilingAgent:
                 "dtype": str(col_data.dtype),
                 "nan": nan_count,
                 "nan_percent": float(round((nan_count / total_rows) * 100, 6)),
-                "unique": unique_count
+                "unique": unique_count,
             }
 
             # Mode
@@ -39,8 +39,9 @@ class DataProfilingAgent:
                 {
                     "value": str(k)[:100],
                     "count": int(v),
-                    "percent": float(round((v / total_rows) * 100, 6))
-                } for k, v in top_counts.items()
+                    "percent": float(round((v / total_rows) * 100, 6)),
+                }
+                for k, v in top_counts.items()
             ]
 
             col_stats[col] = stats
@@ -68,8 +69,8 @@ class DataProfilingAgent:
 
         try:
             # Parse LLM response
-            start = response.find('{')
-            end = response.rfind('}') + 1
+            start = response.find("{")
+            end = response.rfind("}") + 1
             if start != -1 and end != -1:
                 analysis = json.loads(response[start:end])
             else:
@@ -81,11 +82,16 @@ class DataProfilingAgent:
                 "column_count": len(self.df.columns),
                 "columns": col_stats,
                 "duplicates": int(self.df.duplicated().sum()),
-                "process_mining_readiness": analysis.get("process_mining_readiness", {}),
+                "process_mining_readiness": analysis.get(
+                    "process_mining_readiness", {}
+                ),
                 "thoughts": analysis.get("thoughts", "Analysis completed."),
-                "applied_functions": ["df.describe", "df.nunique", "llm.analyze"]
+                "applied_functions": ["df.describe", "df.nunique", "llm.analyze"],
             }
             return json.dumps(result, indent=2, ensure_ascii=False)
 
         except Exception as e:
-            return json.dumps({"error": f"LLM Analysis failed: {e}. Raw: {response}"}, ensure_ascii=False)
+            return json.dumps(
+                {"error": f"LLM Analysis failed: {e}. Raw: {response}"},
+                ensure_ascii=False,
+            )

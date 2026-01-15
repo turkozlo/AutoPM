@@ -1,13 +1,19 @@
-
-
 import pandas as pd
 
 
 def generate_test_excel(file_path="processes.xlsx"):
     data = {
         "Process ID": [
-            "P001", "P002", "P003", "P004", "P005",
-            "P101", "P102", "P103", "P104", "P105"
+            "P001",
+            "P002",
+            "P003",
+            "P004",
+            "P005",
+            "P101",
+            "P102",
+            "P103",
+            "P104",
+            "P105",
         ],
         "Process Name": [
             "Order to Cash",
@@ -19,7 +25,7 @@ def generate_test_excel(file_path="processes.xlsx"):
             "Insurance Claim Processing",
             "Customer Onboarding",
             "Technical Support Workflow",
-            "Inventory Management"
+            "Inventory Management",
         ],
         "Description": [
             "Standard process for handling customer orders from placement to payment.",
@@ -31,8 +37,8 @@ def generate_test_excel(file_path="processes.xlsx"):
             "Workflow for evaluating and paying out insurance claims.",
             "Steps to register and verify a new customer in the system.",
             "Tiered support process for resolving technical customer queries.",
-            "Monitoring and managing stock levels and warehouse operations."
-        ]
+            "Monitoring and managing stock levels and warehouse operations.",
+        ],
     }
 
     df = pd.DataFrame(data)

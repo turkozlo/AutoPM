@@ -38,10 +38,14 @@ LOCAL_API_KEY = local_config.get("api_key", "ollama")
 # Validate config based on provider
 if PROVIDER == "mistral":
     if not MISTRAL_API_KEY:
-        raise ValueError("Mistral API Key not found in configuration (mistral.api_key).")
+        raise ValueError(
+            "Mistral API Key not found in configuration (mistral.api_key)."
+        )
     os.environ["MISTRAL_API_KEY"] = MISTRAL_API_KEY
 elif PROVIDER == "local":
     if not LOCAL_BASE_URL:
-        raise ValueError("Local model base_url not found in configuration (local.base_url).")
+        raise ValueError(
+            "Local model base_url not found in configuration (local.base_url)."
+        )
 else:
     raise ValueError(f"Unknown provider: {PROVIDER}. Use 'mistral' or 'local'.")

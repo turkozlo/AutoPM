@@ -24,3 +24,4 @@ config.yaml
 # Models
 *.safetensors
 
+pylintrc
