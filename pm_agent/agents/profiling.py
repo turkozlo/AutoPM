@@ -25,7 +25,7 @@ class DataProfilingAgent:
             stats = {
                 "dtype": str(col_data.dtype),
                 "nan": nan_count,
-                "nan_percent": float(round((nan_count / total_rows) * 100, 6)),
+                "nan_percent": float(round((nan_count / total_rows) * 100, 6)) if total_rows > 0 else 0.0,
                 "unique": unique_count,
             }
 

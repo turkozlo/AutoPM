@@ -21,6 +21,8 @@ class ProcessDiscoveryAgent:
         Discovers process model and returns strict discovery_result.json.
         """
         df = self.df.copy()  # Isolate
+        if df.empty:
+            return json.dumps({"error": "DataFrame is empty. Cannot perform discovery."}, ensure_ascii=False)
         self.df_orig = df.copy()  # For debugging
 
         # 0. Deduplicate column names

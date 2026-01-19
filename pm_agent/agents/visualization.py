@@ -21,6 +21,9 @@ class VisualizationAgent:
         Generates mandatory PM charts and asks LLM to interpret them.
         """
         df = self.df.copy()  # Isolate to prevent side effects
+        if df.empty:
+            return json.dumps({"error": "DataFrame is empty. Cannot generate visualizations."}, ensure_ascii=False)
+
         # 1. Identify Columns for PM Charts
         pm_readiness = profiling_report.get("process_mining_readiness", {})
 

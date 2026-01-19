@@ -31,6 +31,8 @@ class ProcessAnalysisAgent:
         """
 
         df = self.df.copy()  # Isolate
+        if df.empty:
+            return json.dumps({"error": "DataFrame is empty. Cannot perform analysis."}, ensure_ascii=False)
         self.df_orig = df.copy()  # For debugging
 
         # 0. Deduplicate column names (common issue with dirty CSVs)

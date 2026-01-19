@@ -1,3 +1,6 @@
+import json
+import re
+
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_mistralai import ChatMistralAI
 from openai import OpenAI
@@ -59,6 +62,51 @@ class LLMClient:
             self.client = ChatMistralAI(
                 model=MISTRAL_MODEL, api_key=MISTRAL_API_KEY, temperature=0.2
             )
+
+    def _parse_json(self, response_str: str) -> dict:
+        """Robustly parse JSON from LLM response."""
+        if not response_str:
+            return None
+
+        cleaned_str = response_str.strip()
+
+        # 1. Simple try
+        try:
+            return json.loads(cleaned_str)
+        except json.JSONDecodeError:
+            pass
+
+        # 2. Strip markdown blocks
+        if "```json" in cleaned_str:
+            try:
+                # Extract content between ```json and ```
+                json_block = cleaned_str.split("```json")[1].split("```")[0].strip()
+                return json.loads(json_block)
+            except (IndexError, json.JSONDecodeError):
+                pass
+        elif "```" in cleaned_str:
+            # Try generic ``` blocks
+            try:
+                parts = cleaned_str.split("```")
+                for part in parts:
+                    part = part.strip()
+                    if part.startswith("{") or part.startswith("["):
+                        try:
+                            return json.loads(part)
+                        except json.JSONDecodeError:
+                            continue
+            except IndexError:
+                pass
+
+        # 3. Regex search for first { or [ to last } or ]
+        json_match = re.search(r"(\{.*\}|\[.*\])", cleaned_str, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group(0))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return None
 
     def generate_response(
         self,
@@ -136,25 +184,15 @@ class LLMClient:
         prompt = f"Шаг: {step_name}\nКонтекст: {context}\nРезультат агента: {result}"
         response = self.generate_response(prompt, system_prompt)
 
-        try:
-            import json
+        parsed = self._parse_json(response)
+        if parsed:
+            return parsed
 
-            # Try to find JSON in the response
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start != -1 and end != -1:
-                return json.loads(response[start:end])
-            return {
-                "passed": True,
-                "critique": "Не удалось разобрать ответ Судьи, пропускаем.",
-                "score": 5,
-            }
-        except Exception:
-            return {
-                "passed": True,
-                "critique": "Ошибка парсинга ответа Судьи.",
-                "score": 5,
-            }
+        return {
+            "passed": True,
+            "critique": f"Не удалось разобрать ответ Судьи, пропускаем. Raw: {response[:100]}",
+            "score": 5,
+        }
 
     def judge_cumulative_progress(
         self, memory: str, artifacts_count: int, cumulative_context: str = ""
@@ -181,16 +219,11 @@ class LLMClient:
 
         response = self.generate_response(prompt, system_prompt)
 
-        try:
-            import json
+        parsed = self._parse_json(response)
+        if parsed:
+            return parsed
 
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start != -1 and end != -1:
-                return json.loads(response[start:end])
-            return {"passed": True, "critique": "Parsing error"}
-        except Exception:
-            return {"passed": True, "critique": "Parsing error"}
+        return {"passed": True, "critique": f"Parsing error. Raw: {response[:100]}"}
 
     def reflect_on_result(self, context: str, result: str) -> dict:
         # Legacy reflection method, kept for compatibility but Judge is preferred now
@@ -307,15 +340,12 @@ class LLMClient:
         response_str = self.generate_response(
             user_prompt, system_prompt, json_mode=True
         )
-        # Clean markdown if present
-        cleaned_str = (
-            response_str.strip().replace("```json", "").replace("```", "").strip()
-        )
-        try:
-            return json.loads(cleaned_str)
-        except json.JSONDecodeError:
-            # Fallback if model fails JSON
-            return {"answer": response_str, "knowledge_update": None, "tool_call": None}
+        parsed = self._parse_json(response_str)
+        if parsed:
+            return parsed
+
+        # Fallback if model fails JSON
+        return {"answer": response_str, "knowledge_update": None, "tool_call": None}
 
     def interpret_tool_result(self, question: str, tool_result: dict) -> dict:
         """
@@ -345,13 +375,11 @@ class LLMClient:
         response_str = self.generate_response(
             user_prompt, system_prompt, json_mode=True
         )
-        cleaned_str = (
-            response_str.strip().replace("```json", "").replace("```", "").strip()
-        )
-        try:
-            return json.loads(cleaned_str)
-        except json.JSONDecodeError:
-            return {"answer": str(tool_result)}
+        parsed = self._parse_json(response_str)
+        if parsed:
+            return parsed
+
+        return {"answer": str(tool_result)}
 
     def generate_pandas_code(
         self,
@@ -429,30 +457,31 @@ class LLMClient:
         response_str = self.generate_response(
             user_prompt, system_prompt, json_mode=True
         )
-        response_str = self.generate_response(
-            user_prompt, system_prompt, json_mode=True
-        )
-        # Fix markdown stripping
-        cleaned_str = response_str.strip()
-        if "```json" in cleaned_str:
-            cleaned_str = cleaned_str.split("```json")[1].split("```")[0].strip()
-        elif "```" in cleaned_str:
-            cleaned_str = cleaned_str.split("```")[0].strip()
 
-        try:
-            return json.loads(cleaned_str)
-        except json.JSONDecodeError:
-            # Fallback: try to find ANYTHING that looks like JSON
-            import re
+        parsed = self._parse_json(response_str)
+        if parsed and "code" in parsed:
+            return parsed
 
-            json_match = re.search(r"\{.*\}", response_str, re.DOTALL)
-            if json_match:
-                try:
-                    return json.loads(json_match.group(0))
-                except Exception:
-                    pass
-            # Last resort
-            return {"thought": "Не удалось распарсить JSON", "code": response_str}
+        # Fallback 1: Extract code from markdown block if JSON failed
+        if "```python" in response_str:
+            try:
+                code_block = response_str.split("```python")[1].split("```")[0].strip()
+                return {"thought": "Извлечено из markdown блока python", "code": code_block}
+            except IndexError:
+                pass
+        elif "```" in response_str:
+            try:
+                code_block = response_str.split("```")[1].strip()
+                return {"thought": "Извлечено из markdown блока", "code": code_block}
+            except IndexError:
+                pass
+
+        # Fallback 2: Check for direct assignment in response_str
+        if "result =" in response_str:
+             return {"thought": "Извлечено прямым текстом", "code": response_str.strip()}
+
+        # Last resort
+        return {"thought": "Не удалось распарсить JSON или код", "code": response_str}
 
     def verify_result(self, question: str, result_str: str) -> dict:
         """
@@ -497,20 +526,16 @@ class LLMClient:
         response_str = self.generate_response(
             user_prompt, system_prompt, json_mode=True
         )
-        # Handle markdown if present
-        cleaned_str = (
-            response_str.strip().replace("```json", "").replace("```", "").strip()
-        )
+        parsed = self._parse_json(response_str)
+        if parsed:
+            return parsed
 
-        try:
-            return json.loads(cleaned_str)
-        except Exception:
-            return {
-                "is_valid": False,
-                "thought": f"Ошибка парсинга ответа проверки (JSON error). Raw: {response_str}",
-                "critique": "Не удалось проверить результат (сбой JSON).",
-                "suggestion": "Попробуй выполнить код еще раз.",
-            }
+        return {
+            "is_valid": False,
+            "thought": f"Ошибка парсинга ответа проверки (JSON error). Raw: {response_str[:100]}",
+            "critique": "Не удалось проверить результат (сбой JSON).",
+            "suggestion": "Попробуй выполнить код еще раз.",
+        }
 
     def interpret_code_result(
         self, question: str, result: str, result_type: str
@@ -539,13 +564,11 @@ class LLMClient:
         response_str = self.generate_response(
             user_prompt, system_prompt, json_mode=True
         )
-        cleaned_str = (
-            response_str.strip().replace("```json", "").replace("```", "").strip()
-        )
-        try:
-            return json.loads(cleaned_str)
-        except json.JSONDecodeError:
-            return {"answer": result}
+        parsed = self._parse_json(response_str)
+        if parsed:
+            return parsed
+
+        return {"answer": result}
 
     def decide_next_step(self, memory: str, tools_description: str) -> dict:
         """
@@ -573,18 +596,12 @@ class LLMClient:
 
         response = self.generate_response(prompt, system_prompt)
 
-        try:
-            import json
+        parsed = self._parse_json(response)
+        if parsed:
+            return parsed
 
-            # Try to find JSON in the response
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start != -1 and end != -1:
-                return json.loads(response[start:end])
-            # Fallback for bad LLM output
-            return {
-                "thought": f"Failed to parse JSON. Raw response: {response}",
-                "tool_name": "Reporting",
-            }
-        except Exception as e:
-            return {"thought": f"Error parsing logic: {e}", "tool_name": "Final Report"}
+        # Fallback for bad LLM output
+        return {
+            "thought": f"Failed to parse JSON. Raw response: {response[:100]}",
+            "tool_name": "Reporting",
+        }

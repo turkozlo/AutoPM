@@ -24,4 +24,9 @@ config.yaml
 # Models
 *.safetensors
 
+# Linting
 pylintrc
+.ruff_cache
+
+# testing
+.pytest_cache
