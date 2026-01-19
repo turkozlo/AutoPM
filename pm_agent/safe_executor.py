@@ -4,6 +4,7 @@ Executes user-generated pandas code in a sandboxed environment.
 """
 
 import ast
+import builtins
 import signal
 import sys
 from typing import Any, Dict
@@ -56,34 +57,38 @@ def execute_pandas_code(
     """
     # Create safe namespace
     safe_df = df.copy()
+    
+    # Define restricted builtins
+    restricted_builtins = {
+        "__import__": builtins.__import__,
+        "len": len,
+        "sum": sum,
+        "min": min,
+        "max": max,
+        "round": round,
+        "sorted": sorted,
+        "list": list,
+        "dict": dict,
+        "str": str,
+        "int": int,
+        "float": float,
+        "bool": bool,
+        "tuple": tuple,
+        "set": set,
+        "abs": abs,
+        "range": range,
+        "enumerate": enumerate,
+        "zip": zip,
+        "any": any,
+        "all": all,
+        "print": lambda *args, **kwargs: None,  # Disable print
+    }
+
     allowed_globals = {
         "df": safe_df,
         "pd": pd,
         "np": np,
-        "__builtins__": {
-            "__import__": __import__,
-            "len": len,
-            "sum": sum,
-            "min": min,
-            "max": max,
-            "round": round,
-            "sorted": sorted,
-            "list": list,
-            "dict": dict,
-            "str": str,
-            "int": int,
-            "float": float,
-            "bool": bool,
-            "tuple": tuple,
-            "set": set,
-            "abs": abs,
-            "range": range,
-            "enumerate": enumerate,
-            "zip": zip,
-            "any": any,
-            "all": all,
-            "print": lambda *args, **kwargs: None,  # Disable print
-        },
+        "__builtins__": restricted_builtins,
     }
 
     local_vars = {}
