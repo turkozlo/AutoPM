@@ -107,13 +107,13 @@ def execute_pandas_code(
             signal.alarm(0)
 
         # Get result
-        result = local_vars.get("result", None)
-
-        if result is None:
+        if "result" not in local_vars:
             return {
                 "success": False,
                 "error": "Код выполнен, но переменная 'result' не определена. Сохрани результат в переменную 'result'.",
             }
+
+        result = local_vars["result"]
 
         # Convert result to JSON-serializable format
         result_str = format_result(result)
