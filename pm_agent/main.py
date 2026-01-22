@@ -738,28 +738,26 @@ def main():
                                         f"{verification.get('suggestion')}"
                                     )
                                     # Fallback: Store result just in case we run out of retries
-                                if attempt == MAX_CODE_ATTEMPTS - 1:
-                                    answer_text = "К сожалению, мне не удалось выполнить расчет точно с помощью кода. Я постараюсь ответить, основываясь на имеющихся у меня общих данных о процессе."
-                                    break
-                                continue  # Retry loop
+                                    if attempt == MAX_CODE_ATTEMPTS - 1:
+                                        answer_text = "К сожалению, мне не удалось выполнить расчет точно с помощью кода. Я постараюсь ответить, основываясь на имеющихся у меня общих данных о процессе."
+                                        break
+                                    continue  # Retry loop
 
-                            # Interpret result
-                            interp = llm.interpret_code_result(
-                                user_input,
-                                exec_result["result"],
-                                exec_result["result_type"],
-                            )
-                            answer_text = interp.get(
-                                "answer", exec_result["result"]
-                            )
-                            break
-                        else:
-                            previous_error = exec_result["error"]
-                            # No need to print technical error to console if we want to hide it, 
-                            # but keeping it for debugging/internal retry is fine.
-                            # Just ensure answer_text doesn't get it at the end.
-                            if attempt == MAX_CODE_ATTEMPTS - 1:
-                                answer_text = "Простите, при выполнении расчетов возникла техническая сложность. Я постараюсь ответить на ваш вопрос без использования кода."
+                                # Interpret result
+                                interp = llm.interpret_code_result(
+                                    user_input,
+                                    exec_result["result"],
+                                    exec_result["result_type"],
+                                )
+                                answer_text = interp.get(
+                                    "answer", exec_result["result"]
+                                )
+                                break
+                            else:
+                                previous_error = exec_result["error"]
+                                print(f"❌ Техническая ошибка (попытка {attempt + 1}/{MAX_CODE_ATTEMPTS}): {previous_error}")
+                                if attempt == MAX_CODE_ATTEMPTS - 1:
+                                    answer_text = "Простите, при выполнении расчетов возникла техническая сложность. Я постараюсь ответить на ваш вопрос без использования кода."
 
                 # Fallback to direct answer
                 if answer_text is None:
