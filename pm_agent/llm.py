@@ -93,9 +93,10 @@ class LLMClient:
                 return f"Ошибка: {e}"
         return "Ошибка: Превышено количество попыток."
 
-    def simple_chat(self, user_query: str, context: str) -> str:
+    def simple_chat(self, user_query: str, context: str, history: list = None) -> str:
         """
         Simple chat that only knows basic dataset stats.
+        Accepts optional history list of {"role": "user"/"assistant", "text": "..."} dicts.
         """
         system_prompt = (
             "Ты — строгий ассистент, который знает ТОЛЬКО базовую информацию о датасете (названия колонок, количество строк и столбцов).\n"
@@ -104,8 +105,20 @@ class LLMClient:
             "2. Если пользователь просит посчитать среднее, медиану, построить график или выполнить код — ОТКАЗЫВАЙСЯ.\n"
             "3. Скажи вежливо: 'Я пока умею только читать структуру файла (строки, колонки), но не умею считать сложную статистику'.\n"
             "4. Используй предоставленный КОНТЕКСТ для ответов.\n"
-            "5. Отвечай на русском языке."
+            "5. Учитывай ИСТОРИЮ ДИАЛОГА, если она есть.\n"
+            "6. Отвечай на русском языке."
         )
-        prompt = f"КОНТЕКСТ ДАННЫХ:\n{context}\n\nВОПРОС ПОЛЬЗОВАТЕЛЯ:\n{user_query}"
-        
+
+        # Build prompt with history
+        prompt_parts = [f"КОНТЕКСТ ДАННЫХ:\n{context}"]
+
+        if history:
+            prompt_parts.append("\nИСТОРИЯ ДИАЛОГА:")
+            for msg in history[-10:]:  # Last 10 messages to avoid token overflow
+                role = "Пользователь" if msg["role"] == "user" else "Ассистент"
+                prompt_parts.append(f"{role}: {msg['text']}")
+
+        prompt_parts.append(f"\nВОПРОС ПОЛЬЗОВАТЕЛЯ:\n{user_query}")
+        prompt = "\n".join(prompt_parts)
+
         return self.generate_response(prompt, system_prompt)
