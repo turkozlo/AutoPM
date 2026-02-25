@@ -4,6 +4,8 @@ import pandas as pd
 import sys
 import os
 import warnings
+import pm4py
+import csv
 from datetime import datetime
 
 # Suppress warnings
@@ -17,6 +19,36 @@ if project_root not in sys.path:
 
 from pm_agent.llm import LLMClient
 from pm_agent.agents.formatter import DataFormatterAgent
+from pm_agent.agents.deviation_detector import DeviationDetectorAgent
+
+
+# ---------------------------------------------------------------------------
+#  Console helpers
+# ---------------------------------------------------------------------------
+
+def robust_input(prompt: str) -> str:
+    """Reads input safely, handling encoding issues in non-UTF-8 terminals."""
+    import sys
+    try:
+        # Try to reconfigure stdin if possible (Python 3.7+)
+        if hasattr(sys.stdin, 'reconfigure'):
+            try:
+                sys.stdin.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+        return input(prompt)
+    except UnicodeDecodeError:
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        # Fallback: read raw bytes and decode with replacement
+        raw_data = sys.stdin.buffer.readline()
+        # Try common encodings, then fallback to 'replace'
+        for enc in ['utf-8', 'cp1251', 'latin-1']:
+            try:
+                return raw_data.decode(enc).strip()
+            except UnicodeError:
+                continue
+        return raw_data.decode('utf-8', errors='replace').strip()
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +61,7 @@ def get_session_dir(file_path: str) -> str:
     return os.path.join("reports", basename)
 
 
-def save_session(session_dir: str, df: pd.DataFrame, column_roles: dict, file_path: str):
+def save_session(session_dir: str, df: pd.DataFrame, column_roles: dict, file_path: str, findings_summary: str):
     """Saves formatted data and column roles to disk."""
     os.makedirs(session_dir, exist_ok=True)
 
@@ -43,6 +75,7 @@ def save_session(session_dir: str, df: pd.DataFrame, column_roles: dict, file_pa
         "saved_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
         "rows": len(df),
         "columns": len(df.columns),
+        "findings_summary": findings_summary
     }
     with open(os.path.join(session_dir, "session.json"), "w", encoding="utf-8") as f:
         json.dump(session_meta, f, ensure_ascii=False, indent=2)
@@ -104,6 +137,13 @@ def map_columns(df: pd.DataFrame) -> dict:
     """Interactive column mapping for Process Mining roles."""
     columns = list(df.columns)
 
+    # Standard XES/pm4py column names
+    defaults = {
+        "case_id": "case:concept:name" if "case:concept:name" in columns else (columns[0] if columns else ""),
+        "activity": "concept:name" if "concept:name" in columns else (columns[1] if len(columns) > 1 else ""),
+        "timestamp": "time:timestamp" if "time:timestamp" in columns else (columns[2] if len(columns) > 2 else "")
+    }
+
     print("\n📋 Колонки в датасете:")
     print("-" * 40)
     for i, col in enumerate(columns, 1):
@@ -113,12 +153,21 @@ def map_columns(df: pd.DataFrame) -> dict:
         print(f"  {i:3d}. {col:<30s}  (пример: {sample})")
     print("-" * 40)
 
-    print("\n🔧 Укажите номер или название колонки для каждой роли:")
+    print("\n🔧 Проверьте или укажите колонки для ролей (Enter для значения по умолчанию):")
+    
+    col_case = robust_input(f"  Case ID [{defaults['case_id']}]: ").strip() or defaults['case_id']
+    col_act = robust_input(f"  Activity [{defaults['activity']}]: ").strip() or defaults['activity']
+    col_ts = robust_input(f"  Timestamp [{defaults['timestamp']}]: ").strip() or defaults['timestamp']
+
+    # Simple validation/lookup
+    def resolve_col(val, cols):
+        if val.isdigit() and 1 <= int(val) <= len(cols): return cols[int(val)-1]
+        return val if val in cols else val # Fallback to literal if not found (ask_column would be better but let's keep it simple for now)
 
     column_roles = {
-        "case_id": ask_column(columns, "Case ID (ID экземпляра процесса)"),
-        "activity": ask_column(columns, "Activity (название действия/события)"),
-        "timestamp": ask_column(columns, "Timestamp (временная метка)"),
+        "case_id": resolve_col(col_case, columns),
+        "activity": resolve_col(col_act, columns),
+        "timestamp": resolve_col(col_ts, columns),
     }
 
     print("\n✅ Маппинг колонок:")
@@ -133,7 +182,7 @@ def map_columns(df: pd.DataFrame) -> dict:
 #  Report
 # ---------------------------------------------------------------------------
 
-def generate_report(session_dir: str, df: pd.DataFrame, column_roles: dict):
+def generate_report(session_dir: str, df: pd.DataFrame, column_roles: dict, findings_summary: str):
     """Generates and saves a basic PM report."""
     rows = len(df)
     cols = len(df.columns)
@@ -148,7 +197,8 @@ def generate_report(session_dir: str, df: pd.DataFrame, column_roles: dict):
         "## Column Roles (PM Mapping)\n"
         f"- **Case ID**: `{column_roles['case_id']}`\n"
         f"- **Activity**: `{column_roles['activity']}`\n"
-        f"- **Timestamp**: `{column_roles['timestamp']}`\n"
+        f"- **Timestamp**: `{column_roles['timestamp']}`\n\n"
+        f"{findings_summary}\n"
     )
 
     report_path = os.path.join(session_dir, "report.md")
@@ -161,30 +211,50 @@ def generate_report(session_dir: str, df: pd.DataFrame, column_roles: dict):
     print("----------------------")
 
 
-# ---------------------------------------------------------------------------
-#  Main
-# ---------------------------------------------------------------------------
+def load_csv_robustly(file_path: str) -> pd.DataFrame:
+    """Try to load CSV with multiple encodings and automatic delimiter detection."""
+    # Common encodings for regional data (UTF-8, Windows-1251, Western)
+    encodings = ['utf-8', 'cp1251', 'latin-1', 'utf-8-sig']
+    last_err = None
+    
+    for enc in encodings:
+        try:
+            # sep=None and engine='python' enable automatic delimiter detection
+            return pd.read_csv(file_path, sep=None, engine='python', encoding=enc)
+        except (UnicodeDecodeError, UnicodeError) as e:
+            last_err = e
+            continue
+        except Exception as e:
+            # Other errors (file not found, etc.) should be raised immediately
+            raise e
+            
+    if last_err:
+        raise last_err
+    return pd.DataFrame()
+
 
 def main():
     parser = argparse.ArgumentParser(description="AutoPM Agent")
     parser.add_argument("--file", type=str, help="Path to event log file")
     args = parser.parse_args()
 
-    print("🤖 AutoPM Agent")
+    print("AutoPM Agent")
 
     # 1. Get file path (FIRST!)
     file_path = args.file
     if not file_path:
         print("Please provide a file using --file argument or input below.")
-        file_path = input("Enter path to dataset file: ").strip().strip('"')
+        file_path = robust_input("Enter path to dataset file: ").strip().strip('"')
 
     # 2. Check for existing session (IMMEDIATELY)
     session_dir = get_session_dir(file_path)
     existing = load_session(session_dir)
+    findings_summary = ""
 
     if existing:
         df, column_roles, meta = existing
-        print(f"\n✅ Загружена предыдущая сессия от {meta['saved_at']}")
+        findings_summary = meta.get("findings_summary", "")
+        print(f"\nLoaded previous session from {meta['saved_at']}")
         print(f"   Файл: {meta['source_file']}")
         print(f"   Строк: {meta['rows']}, Столбцов: {meta['columns']}")
         print(f"   Case ID → {column_roles['case_id']}, "
@@ -192,7 +262,7 @@ def main():
               f"Timestamp → {column_roles['timestamp']}")
 
     # 3. Init LLM (needed for formatting and chat)
-    print("🤖 Connecting to LLM...")
+    print("Connecting to LLM...")
     try:
         llm_client = LLMClient()
     except Exception as e:
@@ -201,39 +271,71 @@ def main():
 
     if not existing:
         # 4. Load raw data
-        print(f"\n📂 Loading data from {file_path}...")
+        print(f"\nLoading data from {file_path}...")
         try:
             if file_path.endswith('.csv'):
-                df = pd.read_csv(file_path)
+                df = load_csv_robustly(file_path)
             elif file_path.endswith('.xlsx') or file_path.endswith('.xls'):
                 df = pd.read_excel(file_path)
+            elif file_path.endswith('.xes') or file_path.endswith('.xes.gz'):
+                print("Using pm4py to read XES...")
+                df = pm4py.read_xes(file_path)
             else:
-                df = pd.read_csv(file_path)
+                # Default attempt as CSV if extension is unknown
+                try:
+                    df = load_csv_robustly(file_path)
+                except Exception:
+                    df = pd.read_csv(file_path) # Final fallback
         except Exception as e:
             print(f"❌ Error loading file: {e}")
             return
 
-        print(f"✅ Data loaded. ({len(df)} rows, {len(df.columns)} columns)")
+        print(f"Data loaded. ({len(df)} rows, {len(df.columns)} columns)")
 
         # 5. Column Mapping
         column_roles = map_columns(df)
 
-        # 6. Format Data
-        print("\n🧹 Formatting data types using DataFormatter...")
+        # 6. Deviation Detection
+        print("\nRunning Deviation Detection...")
+        try:
+            detector = DeviationDetectorAgent(
+                case_col=column_roles['case_id'],
+                activity_col=column_roles['activity'],
+                timestamp_col=column_roles['timestamp']
+            )
+            # 1. Preprocess (renames columns to pm4py standard)
+            df, quality = detector.preprocess_event_log(df)
+            
+            if quality['warnings']:
+                print("\nData Quality Warnings:")
+                for w in quality['warnings']: print(f"  - {w}")
+            
+            # 2. Run analyzers on cleaned data
+            detector.run_analysis(df)
+            findings_summary = detector.get_summary_text()
+            print("Deviation detection complete.")
+        except Exception as e:
+            import traceback
+            print(f"Deviation detection failed: {e}")
+            traceback.print_exc()
+            findings_summary = "Deviation detection was skipped or failed due to an error."
+
+        # 7. Format Data
+        print("\nFormatting data types using DataFormatter...")
         try:
             formatter = DataFormatterAgent(df, llm_client)
             df = formatter.run()
-            print("✅ Data formatting complete.")
+            print("Data formatting complete.")
         except Exception as e:
-            print(f"⚠️ Formatting failed: {e}. Proceeding with raw data.")
+            print(f"⚠️ Formatting failed: {e}. Proceeding with clean data.")
 
-        # 7. Save session
-        save_session(session_dir, df, column_roles, file_path)
+        # 8. Save session
+        save_session(session_dir, df, column_roles, file_path, findings_summary)
 
-    # 8. Generate report
-    generate_report(session_dir, df, column_roles)
+    # 9. Generate report
+    generate_report(session_dir, df, column_roles, findings_summary)
 
-    # 9. Chat Loop
+    # 10. Chat Loop
     rows = len(df)
     cols = len(df.columns)
     col_names = ", ".join(list(df.columns))
@@ -243,7 +345,8 @@ def main():
         f"Column Names: {col_names}.\n"
         f"PM Roles: Case ID = '{column_roles['case_id']}', "
         f"Activity = '{column_roles['activity']}', "
-        f"Timestamp = '{column_roles['timestamp']}'."
+        f"Timestamp = '{column_roles['timestamp']}'.\n"
+        f"Findings from Deviation analysis:\n{findings_summary}"
     )
 
     # Load chat history
@@ -255,18 +358,18 @@ def main():
     else:
         chat_history = []
 
-    print("\n💬 Chat with your data! (Type 'exit' to quit)")
+    print("\nChat with your data! (Type 'exit' to quit)")
 
     while True:
         try:
-            user_input = input("\nYou: ").strip()
+            user_input = robust_input("\nYou: ").strip()
             if user_input.lower() in ['exit', 'quit', 'q']:
                 break
 
             if not user_input:
                 continue
 
-            print("🤖 Thinking...")
+            print("Thinking...")
             response = llm_client.simple_chat(user_input, context_str, chat_history)
             print(f"🤖 {response}")
 
