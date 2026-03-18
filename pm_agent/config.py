@@ -35,6 +35,11 @@ LOCAL_BASE_URL = local_config.get("base_url", "http://localhost:11434/v1")
 LOCAL_MODEL = local_config.get("model", "llama3.2")
 LOCAL_API_KEY = local_config.get("api_key", "ollama")
 
+# RAG Settings
+rag_settings = config.get("rag", {})
+RAG_DOC_DIR = rag_settings.get("docs_dir", "PM_Platform_docs")
+RAG_MODEL_PATH = rag_settings.get("embedding_model_path", "models/multilingual-e5-large")
+
 # Validate config based on provider
 if PROVIDER == "mistral":
     if not MISTRAL_API_KEY:

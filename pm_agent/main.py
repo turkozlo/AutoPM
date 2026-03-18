@@ -20,6 +20,9 @@ if project_root not in sys.path:
 from pm_agent.llm import LLMClient
 from pm_agent.agents.formatter import DataFormatterAgent
 from pm_agent.agents.deviation_detector import DeviationDetectorAgent
+from pm_agent.safe_executor import execute_pandas_code, validate_code_syntax, get_df_info_for_llm
+from pm_agent.rag_manager import RAGManager
+from pm_agent.config import RAG_DOC_DIR, RAG_MODEL_PATH
 
 
 # ---------------------------------------------------------------------------
@@ -261,10 +264,20 @@ def main():
               f"Activity → {column_roles['activity']}, "
               f"Timestamp → {column_roles['timestamp']}")
 
-    # 3. Init LLM (needed for formatting and chat)
+    # 3. Init RAG and LLM
+    print("Initializing RAG Knowledge Base...")
+    rag_manager = None
+    if os.path.exists(RAG_MODEL_PATH):
+        try:
+            rag_manager = RAGManager(RAG_DOC_DIR, RAG_MODEL_PATH)
+        except Exception as e:
+            print(f"⚠️ RAG Initialization failed: {e}")
+    else:
+        print(f"ℹ️ RAG model not found at {RAG_MODEL_PATH}, skipping RAG.")
+
     print("Connecting to LLM...")
     try:
-        llm_client = LLMClient()
+        llm_client = LLMClient(rag_manager=rag_manager)
     except Exception as e:
         print(f"❌ Error initializing LLM Client: {e}")
         return
@@ -335,7 +348,7 @@ def main():
     # 9. Generate report
     generate_report(session_dir, df, column_roles, findings_summary)
 
-    # 10. Chat Loop
+    # 10. Chat Loop with Code Interpreter
     rows = len(df)
     cols = len(df.columns)
     col_names = ", ".join(list(df.columns))
@@ -358,28 +371,144 @@ def main():
     else:
         chat_history = []
 
-    print("\nChat with your data! (Type 'exit' to quit)")
+    # Prepare DataFrame info for Code Interpreter
+    df_info = get_df_info_for_llm(df)
+
+    # Load session errors (Global memory of past failures)
+    errors_path = os.path.join(session_dir, "session_errors.json")
+    if os.path.exists(errors_path):
+        with open(errors_path, "r", encoding="utf-8") as f:
+            session_errors = json.load(f)
+    else:
+        session_errors = []
+
+    print("\n💬 Чат с данными! (Введите 'exit' для выхода)")
+    print("   Агент может генерировать и выполнять Python-код для ответов на ваши вопросы.\n")
 
     while True:
         try:
-            user_input = robust_input("\nYou: ").strip()
-            if user_input.lower() in ['exit', 'quit', 'q']:
+            user_input = robust_input("\n👤 Вы: ").strip()
+            if user_input.lower() in ['exit', 'quit', 'q', 'выход']:
+                print("🏁 Завершение работы. До свидания!")
                 break
 
             if not user_input:
                 continue
 
-            print("Thinking...")
-            response = llm_client.simple_chat(user_input, context_str, chat_history)
-            print(f"🤖 {response}")
+            # --- Step 1: Smart Router ---
+            print("🤔 Думаю...")
+            resp = llm_client.simple_chat(user_input, context_str, chat_history)
+            needs_code = resp.get("needs_code", False)
+            answer_text = resp.get("answer")
+
+            # Keyword fallback: force code if question looks computational
+            calc_keywords = ["сколько", "посчитай", "вычисли", "найди", "покажи",
+                             "среднее", "медиана", "топ", "процент", "сумма"]
+            if not needs_code and any(kw in user_input.lower() for kw in calc_keywords):
+                needs_code = True
+                answer_text = None
+
+            # --- Step 2: Code Interpreter (if needed) ---
+            if needs_code:
+                print("🧠 Запуск Code Interpreter...")
+                MAX_CODE_ATTEMPTS = 3
+                previous_error = ""
+
+                for attempt in range(MAX_CODE_ATTEMPTS):
+                    # Generate code (passing current previous_error and global session_errors)
+                    all_errors = ""
+                    if session_errors:
+                        all_errors += "РАНЕЕ В ЭТОЙ СЕССИИ БЫЛИ ОШИБКИ (избегай их):\n" + "\n".join(session_errors[-5:]) + "\n\n"
+                    if previous_error:
+                        all_errors += f"ОШИБКА ТЕКУЩЕЙ ПОПЫТКИ:\n{previous_error}"
+
+                    code_response = llm_client.generate_pandas_code(
+                        user_input, df_info, all_errors
+                    )
+                    thought = code_response.get("thought", "")
+                    code = code_response.get("code", "")
+
+                    print(f"💭 Мысль: {thought}")
+                    print(f"📝 Код:\n```python\n{code}\n```")
+
+                    # Validate syntax
+                    validation = validate_code_syntax(code)
+                    if not validation["success"]:
+                        print(f"⚠️ Синтаксическая ошибка: {validation['error']}")
+                        previous_error = validation["error"]
+                        if attempt == MAX_CODE_ATTEMPTS - 1:
+                            answer_text = f"Не удалось сгенерировать корректный код. Ошибка: {previous_error}"
+                        continue
+
+                    # User confirmation
+                    print("\n⚠️ ВНИМАНИЕ: Агент сгенерировал код для выполнения.")
+                    confirm = robust_input("Нажмите Enter для выполнения или любой текст для отмены: ")
+                    if confirm:
+                        print("🚫 Выполнение отменено пользователем.")
+                        answer_text = "Выполнение кода было отменено пользователем."
+                        break
+
+                    # Execute in sandbox
+                    exec_result = execute_pandas_code(code, df)
+
+                    if exec_result["success"]:
+                        # Display path if it's a plot
+                        if str(exec_result['result']).endswith('.png'):
+                            print(f"🎨 Сгенерирован график: {exec_result['result']}")
+                        else:
+                            print(f"✅ Результат: {exec_result['result']}")
+
+                        # Verify result (Passing history)
+                        print("🔎 Самопроверка результата...")
+                        verification = llm_client.verify_result(
+                            user_input, exec_result["result"], chat_history
+                        )
+
+                        if verification.get("is_valid", True) is False:
+                            print(f"🤔 Самопроверка: {verification.get('critique')}")
+                            previous_error = (
+                                f"Результат некорректен: {verification.get('critique')}. "
+                                f"{verification.get('suggestion')}"
+                            )
+                            if attempt == MAX_CODE_ATTEMPTS - 1:
+                                answer_text = "Не удалось получить точный результат после нескольких попыток."
+                                break
+                            continue  # Retry
+
+                        # Interpret result
+                        interp = llm_client.interpret_code_result(
+                            user_input, exec_result["result"], exec_result["result_type"]
+                        )
+                        answer_text = interp.get("answer", str(exec_result["result"]))
+                        break
+                    else:
+                        print(f"❌ Ошибка выполнения: {exec_result['error']}")
+                        previous_error = exec_result["error"]
+                        # Save to global session errors
+                        if previous_error not in session_errors:
+                            session_errors.append(f"Q: {user_input} | ERR: {previous_error}")
+                        
+                        if attempt == MAX_CODE_ATTEMPTS - 1:
+                            answer_text = f"Код не удалось выполнить. Ошибка: {exec_result['error']}"
+
+            # --- Step 3: Show answer ---
+            if answer_text:
+                print(f"\n🤖 {answer_text}")
+            else:
+                answer_text = "Не удалось получить ответ."
+                print(f"\n🤖 {answer_text}")
 
             # Save to history
             chat_history.append({"role": "user", "text": user_input})
-            chat_history.append({"role": "assistant", "text": response})
+            chat_history.append({"role": "assistant", "text": answer_text})
 
             # Persist history to disk
             with open(history_path, "w", encoding="utf-8") as f:
                 json.dump(chat_history, f, ensure_ascii=False, indent=2)
+            
+            # Persist errors to disk
+            with open(errors_path, "w", encoding="utf-8") as f:
+                json.dump(session_errors[-20:], f, ensure_ascii=False, indent=2)
 
         except KeyboardInterrupt:
             print("\nExiting chat.")

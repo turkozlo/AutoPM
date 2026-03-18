@@ -326,129 +326,157 @@ class DeviationDetectorAgent:
     # --- Result Formatting for Report ---
     
     def get_summary_text(self) -> str:
-        """Generates a human-readable summary of findings for all 18 types with explanations."""
+        """Generates a human-readable summary of findings. Only found deviations are shown."""
         lines = ["## 🔍 Результаты анализа отклонений процесса"]
-        
+        found_count = 0
+
         # 1. Outliers
         outliers = self.findings.get('outliers_70', [])
-        lines.append(f"### 1. Аномалии (Outliers)")
-        lines.append("> Редкие или статистически значимые события, которые существенно отклоняются от нормы.")
-        lines.append(f"**Статус**: {', '.join(outliers) if outliers else 'Не обнаружены'}")
         if outliers:
+            found_count += 1
+            lines.append(f"### {found_count}. Аномалии (Outliers)")
+            lines.append("> Редкие или статистически значимые события, которые существенно отклоняются от нормы.")
+            lines.append(f"**Найдены**: {', '.join(outliers)}")
             lines.append(f"*Где искать:* Проверьте кейсы {', '.join(outliers[:5])} на предмет ошибок ввода данных или уникальных сбоев.")
 
         # 2-6. Loops
         loops = self.findings.get('loops_71_75', {})
-        lines.append(f"### 2. Зацикленность (общая)")
-        lines.append("> Любые случаи повторного возникновения операции в рамках одного кейса.")
-        lines.append(f"**Статус**: {'Обнаружена' if any(loops.values()) else 'Не обнаружена'}")
+        if any(loops.values()):
+            found_count += 1
+            lines.append(f"### {found_count}. Зацикленность (общая)")
+            lines.append("> Любые случаи повторного возникновения операции в рамках одного кейса.")
+            lines.append("**Обнаружена**")
 
-        lines.append(f"### 3. Зацикленность «в себя» (Self-loop)")
-        lines.append("> Немедленное повторение того же этапа. Часто указывает на техническое дублирование записей.")
-        lines.append(f"**Статус**: {', '.join(loops.get('self_loops', [])) if loops.get('self_loops') else 'Не обнаружена'}")
+        if loops.get('self_loops'):
+            found_count += 1
+            lines.append(f"### {found_count}. Зацикленность «в себя» (Self-loop)")
+            lines.append("> Немедленное повторение того же этапа. Часто указывает на техническое дублирование записей.")
+            lines.append(f"**Найдены**: {', '.join(loops['self_loops'])}")
 
-        lines.append(f"### 4. Зацикленность «возврат»")
-        lines.append("> Повторение операции после выполнения других действий. Признак переделок.")
-        lines.append(f"**Статус**: {', '.join(loops.get('returns', [])) if loops.get('returns') else 'Не обнаружена'}")
+        if loops.get('returns'):
+            found_count += 1
+            lines.append(f"### {found_count}. Зацикленность «возврат»")
+            lines.append("> Повторение операции после выполнения других действий. Признак переделок.")
+            lines.append(f"**Найдены**: {', '.join(loops['returns'])}")
 
-        lines.append(f"### 5. Зацикленность «Пинг-понг»")
-        lines.append("> Повторение пары операций (A-B-A). Характерно для доработок или пересылки между отделами.")
-        lines.append(f"**Статус**: {', '.join(loops.get('ping_pong', [])) if loops.get('ping_pong') else 'Не обнаружена'}")
+        if loops.get('ping_pong'):
+            found_count += 1
+            lines.append(f"### {found_count}. Зацикленность «Пинг-понг»")
+            lines.append("> Повторение пары операций (A-B-A). Характерно для доработок или пересылки между отделами.")
+            lines.append(f"**Найдены**: {', '.join(loops['ping_pong'])}")
 
-        lines.append(f"### 6. Зацикленность «В начало»")
-        lines.append("> Возврат из середины процесса на самый первый этап. Признак полной отмены и перезапуска.")
-        lines.append(f"**Статус**: {'Обнаружена' if loops.get('back_to_start') else 'Не обнаружена'}")
+        if loops.get('back_to_start'):
+            found_count += 1
+            lines.append(f"### {found_count}. Зацикленность «В начало»")
+            lines.append("> Возврат из середины процесса на самый первый этап. Признак полной отмены и перезапуска.")
+            lines.append("**Обнаружена**")
 
         # 7. Long Cycles
         lc = self.findings.get('long_cycles_76', {})
-        thr = lc.get('threshold_h')
-        lines.append(f"### 7. Долгий цикл (Long Cycle Time)")
-        lines.append("> Превышение времени выполнения процесса над нормативными или типичными значениями.")
-        lines.append(f"**Статус**: {f'Обнаружен (кейсы дольше {thr}ч)' if lc.get('cases') else 'Не обнаружен'}")
+        if lc.get('cases'):
+            found_count += 1
+            thr = lc.get('threshold_h')
+            lines.append(f"### {found_count}. Долгий цикл (Long Cycle Time)")
+            lines.append("> Превышение времени выполнения процесса над нормативными или типичными значениями.")
+            lines.append(f"**Обнаружен**: кейсы дольше {thr}ч")
 
         # 8. Bottlenecks
         bn = self.findings.get('bottlenecks_77', [])
-        lines.append(f"### 8. Узкое место (Bottleneck)")
-        lines.append("> Этапы, вызывающие систематические задержки из-за высокой нагрузки или нехватки ресурсов.")
         if bn:
+            found_count += 1
+            lines.append(f"### {found_count}. Узкое место (Bottleneck)")
+            lines.append("> Этапы, вызывающие систематические задержки из-за высокой нагрузки или нехватки ресурсов.")
             lines.append("**Топ задержек по переходам**:")
             for k, v in bn.items():
                 lines.append(f"  - `{k[0]} -> {k[1]}` (ожидание в среднем: {v['mean']:.2f}ч)")
-        else:
-            lines.append(f"**Статус**: Не обнаружены")
 
         # 9. Manual Steps
         ms = self.findings.get('manual_steps_78', [])
-        lines.append(f"### 9. Нестандартизированный (ручной) этап")
-        lines.append("> Этапы с высокой вариативностью длительности, зависящие от человеческого фактора.")
-        lines.append(f"**Статус**: {', '.join(ms.keys()) if ms else 'Не обнаружены'}")
+        if ms:
+            found_count += 1
+            lines.append(f"### {found_count}. Нестандартизированный (ручной) этап")
+            lines.append("> Этапы с высокой вариативностью длительности, зависящие от человеческого фактора.")
+            lines.append(f"**Найдены**: {', '.join(ms.keys())}")
 
         # 10. One-time Incidents
         oti = self.findings.get('one_time_incidents_79', [])
-        lines.append(f"### 10. Разовые инциденты")
-        lines.append("> Длительные операции, вызванные редким сбоем или аварией (не систематические).")
-        lines.append(f"**Статус**: {', '.join([d['activity'] for d in oti[:10]]) if oti else 'Не обнаружены'}")
-        if len(oti) > 10: lines.append(f"*(и еще {len(oti)-10} этапов)*")
+        if oti:
+            found_count += 1
+            lines.append(f"### {found_count}. Разовые инциденты")
+            lines.append("> Длительные операции, вызванные редким сбоем или аварией (не систематические).")
+            lines.append(f"**Найдены**: {', '.join([d['activity'] for d in oti[:10]])}")
+            if len(oti) > 10: lines.append(f"*(и еще {len(oti)-10} этапов)*")
 
         # 11. Repeated Incidents
         ri = self.findings.get('repeated_incidents_80', [])
-        lines.append(f"### 11. Многократные инциденты")
-        lines.append("> Систематические ошибки или программные сбои, вызывающие долгие операции.")
-        lines.append(f"**Статус**: {', '.join(ri.keys()) if ri else 'Не обнаружены'}")
+        if ri:
+            found_count += 1
+            lines.append(f"### {found_count}. Многократные инциденты")
+            lines.append("> Систематические ошибки или программные сбои, вызывающие долгие операции.")
+            lines.append(f"**Найдены**: {', '.join(ri.keys())}")
 
         # 12. Missed Deadlines
         md = self.findings.get('missed_deadlines_81', [])
-        lines.append(f"### 12. Пропущенные дедлайны")
-        lines.append("> Нарушение временных ограничений процесса (кейсы в топ-5% по длительности).")
-        lines.append(f"**Статус**: {', '.join(md) if md else 'Не обнаружены'}")
+        if md:
+            found_count += 1
+            lines.append(f"### {found_count}. Пропущенные дедлайны")
+            lines.append("> Нарушение временных ограничений процесса (кейсы в топ-5% по длительности).")
+            lines.append(f"**Найдены**: {', '.join(md)}")
 
         # 13. Critical Steps
         cs = self.findings.get('critical_steps_82', [])
-        lines.append(f"### 13. Критически важный этап")
-        lines.append("> Операции, длительность которых наиболее сильно влияет на общую длительность всего процесса.")
-        lines.append(f"**Статус**: {', '.join(cs.keys()) if cs else 'Не обнаружены'}")
         if cs:
+            found_count += 1
+            lines.append(f"### {found_count}. Критически важный этап")
+            lines.append("> Операции, длительность которых наиболее сильно влияет на общую длительность всего процесса.")
+            lines.append(f"**Найдены**: {', '.join(cs.keys())}")
             lines.append(f"*Совет:* Оптимизация именно этих этапов даст максимальный эффект для ускорения процесса.")
 
         # 14. Redundant Activities
         ra = self.findings.get('redundant_activities_83', [])
-        lines.append(f"### 14. Избыточные шаги (Redundant Activities)")
-        lines.append("> Действия, не добавляющие ценности и не влияющие на конечный результат.")
-        lines.append(f"**Статус**: {', '.join(ra) if ra else 'Не обнаружены'}")
+        if ra:
+            found_count += 1
+            lines.append(f"### {found_count}. Избыточные шаги (Redundant Activities)")
+            lines.append("> Действия, не добавляющие ценности и не влияющие на конечный результат.")
+            lines.append(f"**Найдены**: {', '.join(ra)}")
 
         # 15. Variability
         hv = self.findings.get('variability_84', {})
-        lines.append(f"### 15. Вариативность (High Variability)")
-        lines.append("> Слишком много альтернативных путей выполнения. Снижает предсказуемость процесса.")
         if hv.get('high'):
+            found_count += 1
+            lines.append(f"### {found_count}. Вариативность (High Variability)")
+            lines.append("> Слишком много альтернативных путей выполнения. Снижает предсказуемость процесса.")
             lines.append(f"**Статус**: ⚠️ Высокая вариативность ({hv.get('variant_count')} путей, Ratio: {hv.get('ratio')})")
-        else:
-            lines.append(f"**Статус**: В пределах нормы")
 
         # 16. Dark Processes
         dp = self.findings.get('dark_processes_85', {})
-        lines.append(f"### 16. Скрытые сценарии (Dark Processes)")
-        lines.append("> Неформализованные пути выполнения, отсутствующие в стандартных регламентах.")
         if dp.get('dark_variant_count'):
-            lines.append(f"**Статус**: Обнаружено {dp.get('dark_variant_count')} редких путей (покрывают {(1-dp.get('official_coverage'))*100:.1f}% трафика)")
-        else:
-            lines.append(f"**Статус**: Не обнаружены")
+            found_count += 1
+            lines.append(f"### {found_count}. Скрытые сценарии (Dark Processes)")
+            lines.append("> Неформализованные пути выполнения, отсутствующие в стандартных регламентах.")
+            lines.append(f"**Обнаружено**: {dp.get('dark_variant_count')} редких путей (покрывают {(1-dp.get('official_coverage'))*100:.1f}% трафика)")
 
         # 17. Manual Exceptions
         me = self.findings.get('manual_exceptions_86', [])
-        lines.append(f"### 17. Ручные исключения (Manual Exceptions)")
-        lines.append("> Долгие операции с низкой вариативностью, требующие ручного подтверждения.")
-        lines.append(f"**Статус**: {', '.join(me) if me else 'Не обнаружены'}")
+        if me:
+            found_count += 1
+            lines.append(f"### {found_count}. Ручные исключения (Manual Exceptions)")
+            lines.append("> Долгие операции с низкой вариативностью, требующие ручного подтверждения.")
+            lines.append(f"**Найдены**: {', '.join(me)}")
 
         # 18. Rework Loops
         rw = self.findings.get('rework_loops_87', [])
-        lines.append(f"### 18. Обратные потоки (Rework Loops)")
-        lines.append("> Непредусмотренные возвраты на предыдущие этапы из-за ошибок или доработок.")
         if rw:
+            found_count += 1
+            lines.append(f"### {found_count}. Обратные потоки (Rework Loops)")
+            lines.append("> Непредусмотренные возвраты на предыдущие этапы из-за ошибок или доработок.")
             lines.append("**Топ переходов-возвратов**:")
             for k, v in rw.items():
                 lines.append(f"  - `{k[0]} -> {k[1]}` (повторено {v} раз)")
+
+        if found_count == 0:
+            lines.append("\n✅ Отклонений не обнаружено.")
         else:
-            lines.append(f"**Статус**: Не обнаружены")
+            lines.insert(1, f"\n**Обнаружено отклонений: {found_count}**\n")
 
         return "\n".join(lines)

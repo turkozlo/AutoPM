@@ -23,7 +23,15 @@ processes.xlsx
 config.yaml
 
 # Models
+models/
 *.safetensors
+
+# Large Data
+*.xes
+*.xes.gz
+*.png
+presentation.ipynb
+deviation_detection_research.md
 
 # Linting
 pylintrc
