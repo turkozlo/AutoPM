@@ -12,13 +12,13 @@ pip install -r requirements.txt
 ## Запуск
 
 ```bash
-python server.py --model ../models/Qwen_Qwen2.5.14B-Instruct --port 5000
+python server.py --model models/Qwen_Qwen2.5.14B-Instruct --port 5000
 ```
 
 Или с явным указанием хоста:
 
 ```bash
-python server.py --model ../models/Qwen_Qwen2.5.14B-Instruct --port 5000 --host 0.0.0.0
+python server.py --model models/Qwen_Qwen2.5.14B-Instruct --port 5000 --host 0.0.0.0
 ```
 
 ## Проверка

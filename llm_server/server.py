@@ -8,8 +8,16 @@ Usage:
     python server.py --model models/Qwen_Qwen2.5.14B-Instruct --port 5000
 """
 
-import argparse
+# ---------------------------------------------------------------
+#  Force OFFLINE mode for HuggingFace (MUST be set before imports)
+# ---------------------------------------------------------------
 import os
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+os.environ["HF_EVALUATE_OFFLINE"] = "1"
+
+import argparse
 import time
 import uuid
 from typing import List, Optional
@@ -21,12 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# ---------------------------------------------------------------
-#  Force OFFLINE mode for HuggingFace
-# ---------------------------------------------------------------
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["HF_DATASETS_OFFLINE"] = "1"
+# ... rest of the code ...
 
 
 # ---------------------------------------------------------------
@@ -93,32 +96,28 @@ def load_model(model_path: str):
     """Load model and tokenizer from a local directory."""
     global _model, _tokenizer, _model_name, _device
 
-    # 1. Resolve absolute path for clarity
-    abs_model_path = os.path.abspath(model_path)
-    print(f"[LLM Server] Attempting to load model from: {abs_model_path}")
+    # Convert to absolute path to be sure
+    model_path = os.path.abspath(model_path)
+    print(f"[LLM Server] Target model directory: {model_path}")
+
+    if not os.path.isdir(model_path):
+        print(f"❌ ERROR: Model directory not found: {model_path}")
+        print("Please check if the path is correct and files are present.")
+        return
+
+    # Check for essential files to give better error messages
+    essential_files = ["config.json", "tokenizer_config.json"]
+    missing = [f for f in essential_files if not os.path.exists(os.path.join(model_path, f))]
+    if missing:
+        print(f"⚠️ WARNING: Missing essential files in model directory: {missing}")
+        print("This might cause transformers to try to connect to the internet.")
+
     print(f"[LLM Server] OFFLINE mode: HF_HUB_OFFLINE={os.environ.get('HF_HUB_OFFLINE')}")
 
-    # 2. Pre-flight check
-    if not os.path.exists(abs_model_path):
-        print(f"❌ ERROR: Path does not exist: {abs_model_path}")
-        return
-    if not os.path.isdir(abs_model_path):
-        print(f"❌ ERROR: Path is not a directory: {abs_model_path}")
-        return
-
-    # 3. Check for essential files
-    required_files = ["config.json", "tokenizer_config.json"]
-    missing = [f for f in required_files if not os.path.exists(os.path.join(abs_model_path, f))]
-    if missing:
-        print(f"⚠️ Warning: Missing standard files {missing} in folder.")
-        print(f"Contents of {abs_model_path}:")
-        for f in os.listdir(abs_model_path):
-            print(f"  - {f}")
-
     try:
-        print("[LLM Server] Initializing tokenizer...")
+        print("[LLM Server] Loading tokenizer...")
         _tokenizer = AutoTokenizer.from_pretrained(
-            abs_model_path,
+            model_path,
             local_files_only=True,
             trust_remote_code=True,
         )
@@ -126,27 +125,29 @@ def load_model(model_path: str):
         # Decide device
         if torch.cuda.is_available():
             _device = "cuda"
-            print(f"[LLM Server] CUDA available. GPU: {torch.cuda.get_device_name(0)}, "
-                  f"VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
+            print(f"[LLM Server] CUDA available. GPU: {torch.cuda.get_device_name(0)}")
         else:
             _device = "cpu"
-            print("[LLM Server] No GPU detected, running on CPU (will be slow).")
+            print("[LLM Server] No GPU detected, running on CPU.")
 
-        print("[LLM Server] Initializing model (this may take a few minutes for 14B)...")
+        print("[LLM Server] Loading model (this may take a while)...")
         _model = AutoModelForCausalLM.from_pretrained(
-            abs_model_path,
+            model_path,
             local_files_only=True,
             trust_remote_code=True,
             torch_dtype=torch.float16 if _device == "cuda" else torch.float32,
             device_map="auto" if _device == "cuda" else None,
         )
-    except Exception as e:
-        print(f"❌ ERROR initializing tokenizer/model: {e}")
-        return
 
-    _model.eval()
-    _model_name = abs_model_path
-    print(f"[LLM Server] Model loaded successfully on {_device}.")
+        if _device == "cpu":
+            _model = _model.to(_device)
+
+        _model.eval()
+        _model_name = model_path
+        print(f"[LLM Server] Model loaded successfully on {_device}.")
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR during model loading: {e}")
+        print("Ensure all model files are present and you have enough memory/VRAM.")
 
 
 # ---------------------------------------------------------------
