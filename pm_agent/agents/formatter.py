@@ -14,6 +14,8 @@ class DataFormatterAgent:
         
         # 1. Prepare sample for LLM
         sample = self.df.head(5).to_string()
+        if len(sample) > 2000:
+            sample = sample[:2000] + "\n... (truncated)"
         columns = list(self.df.columns)
         
         system_prompt = (

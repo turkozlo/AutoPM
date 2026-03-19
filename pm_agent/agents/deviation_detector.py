@@ -53,7 +53,7 @@ class DeviationDetectorAgent:
             self.quality_report['warnings'].append(f'Удалено {dup_count} полных дубликатов (case+activity+timestamp)')
 
         # Sort
-        df = df.sort_values([self.case_col, self.timestamp_col], kind='mergesort').reset_index(drop=True)
+        df = df.sort_values([self.case_col, self.timestamp_col], kind='stable').reset_index(drop=True)
 
         # Single-event cases
         case_sizes = df.groupby(self.case_col).size()

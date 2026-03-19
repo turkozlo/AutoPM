@@ -254,6 +254,8 @@ def chat_completions(request: ChatCompletionRequest):
         )
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Generation error: {str(e)}")
 
 
