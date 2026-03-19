@@ -63,8 +63,9 @@ urllib3==2.6.2
 uuid_utils==0.12.0
 wheel==0.45.1
 zstandard==0.25.0
-faiss-gpu==1.7.2
-faiss-cpu==1.13.2
-sentence-transformers==4.41.0
+faiss-gpu-cu12>=1.8.0   # Required for CUDA 12 and Python 3.12
+faiss-cpu>=1.8.0
+sentence-transformers>=3.0.0
+transformers==4.46.1
+torch>=2.4.0            # Stable for Python 3.12
 openpyxl==3.1.5
-torch>=2.0.0
