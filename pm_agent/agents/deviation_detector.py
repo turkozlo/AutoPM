@@ -88,7 +88,8 @@ class DeviationDetectorAgent:
         df = df.sort_values(ts_col)
         df = df.sort_values(case_col, kind='stable').copy()
         df['next_ts'] = df.groupby(case_col)[ts_col].shift(-1)
-        df['duration_h'] = (df['next_ts'] - df[ts_col]).dt.total_seconds() / 3600
+        diff = df['next_ts'] - df[ts_col]
+        df['duration_h'] = pd.to_timedelta(diff).dt.total_seconds() / 3600.0
 
         # Protect against negative durations
         neg = df['duration_h'] < 0
