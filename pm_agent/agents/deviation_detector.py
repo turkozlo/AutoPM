@@ -85,7 +85,8 @@ class DeviationDetectorAgent:
         ts_col = 'time:timestamp'
         act_col = 'concept:name'
         
-        df = df.sort_values([case_col, ts_col]).copy()
+        df = df.sort_values(ts_col)
+        df = df.sort_values(case_col, kind='stable').copy()
         df['next_ts'] = df.groupby(case_col)[ts_col].shift(-1)
         df['duration_h'] = (df['next_ts'] - df[ts_col]).dt.total_seconds() / 3600
 
@@ -138,7 +139,8 @@ class DeviationDetectorAgent:
     def _detect_all_loops(self, df):
         case_col = 'case:concept:name'
         act_col = 'concept:name'
-        df = df.sort_values([case_col, 'time:timestamp'])
+        df = df.sort_values('time:timestamp')
+        df = df.sort_values(case_col, kind='stable')
         df['prev_act'] = df.groupby(case_col)[act_col].shift(1)
         df['prev2_act'] = df.groupby(case_col)[act_col].shift(2)
         df['next_act'] = df.groupby(case_col)[act_col].shift(-1)
@@ -311,7 +313,8 @@ class DeviationDetectorAgent:
     def _detect_rework_loops(self, df):
         case_col = 'case:concept:name'
         act_col = 'concept:name'
-        df = df.sort_values([case_col, 'time:timestamp'])
+        df = df.sort_values('time:timestamp')
+        df = df.sort_values(case_col, kind='stable')
         df['pos'] = df.groupby(case_col).cumcount()
         avg_pos = df.groupby(act_col)['pos'].median().sort_values()
         order = {act: i for i, act in enumerate(avg_pos.index)}
