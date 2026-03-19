@@ -66,8 +66,10 @@ class DeviationDetectorAgent:
             )
             self.quality_report['single_event_cases_count'] = len(single_event)
 
-        # Formatting for pm4py (internally we use pm4py standards for some tools)
-        df = pm4py.format_dataframe(df, case_id=self.case_col, activity_key=self.activity_col, timestamp_key=self.timestamp_col)
+        # Formatting for pm4py (bypassing buggy pm4py.format_dataframe for pandas datetimes)
+        df['case:concept:name'] = df[self.case_col]
+        df['concept:name'] = df[self.activity_col]
+        df['time:timestamp'] = df[self.timestamp_col]
 
         # Stats
         self.quality_report['clean_rows'] = len(df)
