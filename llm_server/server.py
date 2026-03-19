@@ -93,37 +93,59 @@ def load_model(model_path: str):
     """Load model and tokenizer from a local directory."""
     global _model, _tokenizer, _model_name, _device
 
-    print(f"[LLM Server] Loading model from: {model_path}")
+    # 1. Resolve absolute path for clarity
+    abs_model_path = os.path.abspath(model_path)
+    print(f"[LLM Server] Attempting to load model from: {abs_model_path}")
     print(f"[LLM Server] OFFLINE mode: HF_HUB_OFFLINE={os.environ.get('HF_HUB_OFFLINE')}")
 
-    _tokenizer = AutoTokenizer.from_pretrained(
-        model_path,
-        local_files_only=True,
-        trust_remote_code=True,
-    )
+    # 2. Pre-flight check
+    if not os.path.exists(abs_model_path):
+        print(f"❌ ERROR: Path does not exist: {abs_model_path}")
+        return
+    if not os.path.isdir(abs_model_path):
+        print(f"❌ ERROR: Path is not a directory: {abs_model_path}")
+        return
 
-    # Decide device
-    if torch.cuda.is_available():
-        _device = "cuda"
-        print(f"[LLM Server] CUDA available. GPU: {torch.cuda.get_device_name(0)}, "
-              f"VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
-    else:
-        _device = "cpu"
-        print("[LLM Server] No GPU detected, running on CPU (will be slow).")
+    # 3. Check for essential files
+    required_files = ["config.json", "tokenizer_config.json"]
+    missing = [f for f in required_files if not os.path.exists(os.path.join(abs_model_path, f))]
+    if missing:
+        print(f"⚠️ Warning: Missing standard files {missing} in folder.")
+        print(f"Contents of {abs_model_path}:")
+        for f in os.listdir(abs_model_path):
+            print(f"  - {f}")
 
-    _model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        local_files_only=True,
-        trust_remote_code=True,
-        torch_dtype=torch.float16 if _device == "cuda" else torch.float32,
-        device_map="auto" if _device == "cuda" else None,
-    )
+    try:
+        print("[LLM Server] Initializing tokenizer...")
+        _tokenizer = AutoTokenizer.from_pretrained(
+            abs_model_path,
+            local_files_only=True,
+            trust_remote_code=True,
+        )
 
-    if _device == "cpu":
-        _model = _model.to(_device)
+        # Decide device
+        if torch.cuda.is_available():
+            _device = "cuda"
+            print(f"[LLM Server] CUDA available. GPU: {torch.cuda.get_device_name(0)}, "
+                  f"VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
+        else:
+            _device = "cpu"
+            print("[LLM Server] No GPU detected, running on CPU (will be slow).")
+
+        print("[LLM Server] Initializing model (this may take a few minutes for 14B)...")
+        _model = AutoModelForCausalLM.from_pretrained(
+            abs_model_path,
+            local_files_only=True,
+            trust_remote_code=True,
+            torch_dtype=torch.float16 if _device == "cuda" else torch.float32,
+            device_map="auto" if _device == "cuda" else None,
+        )
+    except Exception as e:
+        print(f"❌ ERROR initializing tokenizer/model: {e}")
+        return
 
     _model.eval()
-    _model_name = model_path
+    _model_name = abs_model_path
     print(f"[LLM Server] Model loaded successfully on {_device}.")
 
 
