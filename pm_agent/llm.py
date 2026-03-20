@@ -9,6 +9,9 @@ from .config import (
     MISTRAL_API_KEY,
     MISTRAL_MODEL,
     PROVIDER,
+    GIGACHAT_BASE_URL,
+    GIGACHAT_ACCESS_TOKEN,
+    GIGACHAT_MODEL,
 )
 
 class LocalLLMClient:
@@ -45,6 +48,13 @@ class LLMClient:
                 model=LOCAL_MODEL,
                 api_key=LOCAL_API_KEY,
                 temperature=0.2,
+            )
+        elif PROVIDER == "gigachat":
+            from langchain_gigachat.chat_models import GigaChat
+            self.client = GigaChat(
+                base_url=GIGACHAT_BASE_URL,
+                access_token=GIGACHAT_ACCESS_TOKEN,
+                model=GIGACHAT_MODEL,
             )
         else:
             self.client = ChatMistralAI(

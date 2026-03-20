@@ -21,7 +21,7 @@ def load_config():
 
 config = load_config()
 
-# Provider setting: "mistral" or "local"
+# Provider setting: "mistral", "local", or "gigachat"
 PROVIDER = config.get("provider", "mistral")
 
 # Extract Mistral Config (cloud)
@@ -34,6 +34,12 @@ local_config = config.get("local", {})
 LOCAL_BASE_URL = local_config.get("base_url", "http://localhost:11434/v1")
 LOCAL_MODEL = local_config.get("model", "llama3.2")
 LOCAL_API_KEY = local_config.get("api_key", "ollama")
+
+# Extract GigaChat Config
+gigachat_config = config.get("gigachat", {})
+GIGACHAT_BASE_URL = gigachat_config.get("base_url") or os.getenv("GIGACHAT_API_URL", "")
+GIGACHAT_ACCESS_TOKEN = gigachat_config.get("access_token") or os.getenv("JPY_API_TOKEN", "")
+GIGACHAT_MODEL = gigachat_config.get("model", "GigaChat-2")
 
 # RAG Settings
 rag_settings = config.get("rag", {})
@@ -52,5 +58,14 @@ elif PROVIDER == "local":
         raise ValueError(
             "Local model base_url not found in configuration (local.base_url)."
         )
+elif PROVIDER == "gigachat":
+    if not GIGACHAT_BASE_URL:
+        raise ValueError(
+            "GigaChat base_url not found. Set gigachat.base_url in config.yaml or GIGACHAT_API_URL env var."
+        )
+    if not GIGACHAT_ACCESS_TOKEN:
+        raise ValueError(
+            "GigaChat access_token not found. Set gigachat.access_token in config.yaml or JPY_API_TOKEN env var."
+        )
 else:
-    raise ValueError(f"Unknown provider: {PROVIDER}. Use 'mistral' or 'local'.")
+    raise ValueError(f"Unknown provider: {PROVIDER}. Use 'mistral', 'local', or 'gigachat'.")
