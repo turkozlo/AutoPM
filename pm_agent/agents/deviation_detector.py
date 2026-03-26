@@ -128,13 +128,24 @@ class DeviationDetectorAgent:
         ts_col = 'time:timestamp'
         act_col = 'concept:name'
 
-        # Сортировка перед shift:
-        df['_sort_ts'] = df[ts_col].astype('int64')
-        df = df.sort_values([case_col, '_sort_ts']).reset_index(drop=True)
-        df = df.drop(columns=['_sort_ts'])
+        # Не мутируем оригинальный df — делаем копию
+        df = df.copy()
 
-        df['next_ts'] = df.groupby(case_col)[ts_col].shift(-1)
-        df['duration_h'] = (df['next_ts'] - df[ts_col]).dt.total_seconds() / 3600.0
+        # Сортировка перед shift: naive datetime64[ns] сортируется напрямую (без astype int64)
+        df = df.sort_values([case_col, ts_col]).reset_index(drop=True)
+
+        # Shift для вычисления времени следующего события
+        next_ts_raw = df.groupby(case_col)[ts_col].shift(-1)
+
+        # Надёжное вычисление через int64-наносекунды, чтобы избежать
+        # бага с .dt.total_seconds() при object-dtype после groupby.shift
+        CUR_INT = df[ts_col].values.astype('int64')
+        NXT_INT = pd.to_datetime(next_ts_raw, errors='coerce').values.astype('int64')
+        iNaT = np.iinfo(np.int64).min
+        valid = (CUR_INT != iNaT) & (NXT_INT != iNaT)
+        duration_ns = np.where(valid, NXT_INT - CUR_INT, np.nan)
+        df['next_ts'] = next_ts_raw
+        df['duration_h'] = duration_ns / 3.6e12  # ns → hours
         df.loc[df['duration_h'] < 0, 'duration_h'] = np.nan
 
         df['prev_act'] = df.groupby(case_col)[act_col].shift(1)
@@ -146,7 +157,10 @@ class DeviationDetectorAgent:
         case_col = 'case:concept:name'
         ts_col = 'time:timestamp'
         case_dur = df_dur.groupby(case_col)[ts_col].agg(['min', 'max'])
-        case_dur['duration_h'] = (case_dur['max'] - case_dur['min']).dt.total_seconds() / 3600.0
+        # Та же надёжная арифметика через int64 наносекунды
+        min_int = case_dur['min'].values.astype('int64')
+        max_int = case_dur['max'].values.astype('int64')
+        case_dur['duration_h'] = (max_int - min_int) / 3.6e12
         return case_dur
 
     # --- Детекторы базовых неэффективностей ---
