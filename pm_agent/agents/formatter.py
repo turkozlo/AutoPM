@@ -21,7 +21,6 @@ class DataFormatterAgent:
                 return False
             
             # Регулярки для ISO дат (2025-01-01, 2025-01-01T12:00:00, etc)
-            # И чуть более общие паттерны
             date_patterns = [
                 r'^\d{4}-\d{2}-\d{2}',           # 2025-01-01
                 r'^\d{2}\.\d{2}\.\d{4}',         # 01.01.2025
@@ -35,7 +34,6 @@ class DataFormatterAgent:
                 if any(re.search(p, val) for p in date_patterns):
                     matches += 1
             
-            # Если хотя бы 30% непустых строк совпало — считаем датой
             return (matches / len(sample)) > 0.3
             
         return False
@@ -70,18 +68,16 @@ class DataFormatterAgent:
         for col in df_new.columns:
             target_type = type_map.get(col)
             
-            # АГРЕССИВНАЯ ПРОВЕРКА НА ДАТЫ (даже если LLM ошибся)
+            # АГРЕССИВНАЯ ПРОВЕРКА НА ДАТЫ
             if target_type == 'datetime' or self._is_datetime_like(df_new[col]):
                 try:
-                    # ТОТАЛЬНАЯ ЗАЧИСТКА ДАТ:
-                    # 1. Конвертируем в UTC (обрабатывает и строки, и Timestamp-объекты)
-                    # 2. Убираем таймзону (делаем наивной), чтобы numpy/pm4py не ругались
-                    # 3. Принудительно ставим тип datetime64[ns]
+                    # УЛЬТИМАТИВНЫЙ ФИКС: Сначала в строку, потом в дату.
+                    # Это убивает баг 'Timestamp is not convertible to datetime' в cuDF.
                     df_new[col] = pd.to_datetime(
-                        df_new[col], utc=True, errors='coerce'
+                        df_new[col].astype(str), utc=True, errors='coerce'
                     ).dt.tz_localize(None).astype('datetime64[ns]')
                     print(f"Column '{col}' FORCED to datetime64[ns]")
-                    continue # Переходим к следующей колонке
+                    continue
                 except Exception as e:
                     print(f"Error forced-converting '{col}' to datetime: {e}")
 
