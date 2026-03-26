@@ -28,8 +28,13 @@ class DeviationDetectorAgent:
 
         df = df.copy()
 
-        # 1. Парсинг дат
-        df[self.timestamp_col] = pd.to_datetime(df[self.timestamp_col], format='mixed', errors='coerce')
+        # 1. Парсинг дат — универсальный метод:
+        # utc=True корректно обрабатывает как строки (CSV), так и уже готовые Timestamp-объекты (XES из pm4py),
+        # нормализуя все timezone в UTC. .dt.tz_localize(None) убирает метку tz, возвращая
+        # naive datetime64[ns] — совместимый как с numpy, так и с pm4py.
+        df[self.timestamp_col] = pd.to_datetime(
+            df[self.timestamp_col], utc=True, errors='coerce'
+        ).dt.tz_localize(None)
 
         # Удаление пустых дат
         nat_count = int(df[self.timestamp_col].isna().sum())
@@ -42,11 +47,7 @@ class DeviationDetectorAgent:
         df = df.sort_values([self.case_col, '_sort_ts']).reset_index(drop=True)
         df = df.drop(columns=['_sort_ts'])
 
-        # Локализация времени после безопасной сортировки (чтобы избежать бага)
-        if df[self.timestamp_col].dt.tz is None:
-            df[self.timestamp_col] = df[self.timestamp_col].dt.tz_localize('UTC')
-        else:
-            df[self.timestamp_col] = df[self.timestamp_col].dt.tz_convert('UTC')
+        # Timezone уже обработана при парсинге (utc=True + tz_localize(None))
 
         # Null/NaN in case_id and activity
         for col, name in [(self.case_col, 'case_id'), (self.activity_col, 'activity')]:
