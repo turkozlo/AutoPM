@@ -1,107 +1,7 @@
 import pandas as pd
 import numpy as np
 import pm4py
-from scipy import stats
 from typing import Dict, List, Any, Tuple
-import os
-from datetime import datetime
-
-
-# ---------------------------------------------------------------------------
-#  cudf-safe helpers: all datetime/timedelta logic in pure numpy
-# ---------------------------------------------------------------------------
-
-def _ensure_real_pandas(df):
-    """Force-convert a cudf-proxy DataFrame to real pandas DataFrame.
-
-    cudf.pandas wraps DataFrames in a proxy that can break many operations.
-    Calling ._fsproxy_slow or converting via to_pandas() escapes the proxy.
-    If already a real pandas DataFrame, this is a no-op.
-    """
-    # Fast path: already a real pandas DataFrame
-    if type(df).__module__.startswith('pandas'):
-        return df
-
-    # Try cudf proxy escape hatch
-    if hasattr(df, '_fsproxy_slow'):
-        return df._fsproxy_slow
-
-    # Try cudf to_pandas
-    if hasattr(df, 'to_pandas'):
-        return df.to_pandas()
-
-    # Fallback: reconstruct from numpy arrays
-    data = {}
-    for col in df.columns:
-        try:
-            data[col] = np.array(df[col].values)
-        except Exception:
-            data[col] = list(df[col])
-    return pd.DataFrame(data)
-
-
-def _ts_diff_hours(ts_a, ts_b):
-    """Compute (ts_a - ts_b) in hours as a float64 numpy array.
-
-    ts_a, ts_b: array-like of datetime64.
-    NaT values produce np.nan.
-    """
-    a = np.array(ts_a, dtype='datetime64[ns]')
-    b = np.array(ts_b, dtype='datetime64[ns]')
-    diff = a - b
-    valid = ~np.isnat(diff)
-    hours = np.full(len(diff), np.nan, dtype='float64')
-    if valid.any():
-        hours[valid] = diff[valid] / np.timedelta64(1, 'h')
-    return hours
-
-
-def _groupby_shift(case_ids, values, periods):
-    """Pure-numpy groupby-shift: shift `values` within groups defined by `case_ids`.
-
-    Args:
-        case_ids: 1-D array of group keys (must be pre-sorted by group).
-        values: 1-D array to shift.
-        periods: int, positive = shift forward (lag), negative = shift backward (lead).
-
-    Returns:
-        numpy array of same length with NaN/NaT/None fill for edges.
-    """
-    case_ids = np.asarray(case_ids)
-    values = np.asarray(values)
-    n = len(values)
-    is_dt = np.issubdtype(values.dtype, np.datetime64)
-    is_num = np.issubdtype(values.dtype, np.number)
-
-    if is_dt:
-        out = np.full(n, np.datetime64('NaT'), dtype='datetime64[ns]')
-    elif is_num:
-        out = np.full(n, np.nan, dtype='float64')
-    else:
-        out = np.empty(n, dtype=object)
-        out[:] = None
-
-    # Find group boundaries using sorted case_ids
-    if n == 0:
-        return out
-    boundaries = np.where(case_ids[1:] != case_ids[:-1])[0] + 1
-    starts = np.concatenate([[0], boundaries])
-    ends = np.concatenate([boundaries, [n]])
-
-    for s, e in zip(starts, ends):
-        group = values[s:e]
-        g_len = e - s
-        if periods > 0:
-            if periods < g_len:
-                out[s + periods:e] = group[:g_len - periods]
-        elif periods < 0:
-            ap = -periods
-            if ap < g_len:
-                out[s:e - ap] = group[ap:]
-        else:
-            out[s:e] = group
-
-    return out
 
 
 class DeviationDetectorAgent:
@@ -114,11 +14,11 @@ class DeviationDetectorAgent:
 
     def preprocess_event_log(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Robust preprocessing of event log.
+        Standard pandas preprocessing of event log.
         """
-        # Escape cudf proxy at the very start
-        df = _ensure_real_pandas(df)
-
+        if hasattr(df, 'to_pandas'):
+            df = df.to_pandas()
+            
         self.quality_report = {
             'original_rows': len(df),
             'original_cases': df[self.case_col].nunique(),
@@ -127,34 +27,13 @@ class DeviationDetectorAgent:
 
         df = df.copy()
 
-        # Parse timestamp
-        # Convert to string first, then to datetime64[ns] to avoid cudf Timestamp array bug
-        ts_values = df[self.timestamp_col].astype(str).values
-        # Use numpy to coerce to datetime64[ns], NaT will be assigned to invalid formats
-        try:
-            parsed_ts = pd.Series(pd.to_datetime(ts_values, format='mixed', errors='coerce'))
-        except Exception:
-            # Fallback if mixed parsing fails
-            parsed_ts = pd.Series(pd.to_datetime(ts_values, errors='coerce'))
+        # Parse timestamp string -> naive datetime -> UTC timezone-aware datetime
+        df[self.timestamp_col] = pd.to_datetime(df[self.timestamp_col], errors='coerce', utc=True)
         
-        df[self.timestamp_col] = parsed_ts
-        
-        # Drop NaT before adding timezone
         nat_count = int(df[self.timestamp_col].isna().sum())
         if nat_count > 0:
             self.quality_report['warnings'].append(f'Удалено {nat_count} строк с невалидным timestamp (NaT)')
             df = df.dropna(subset=[self.timestamp_col])
-
-        # Localize to UTC if naive (required by pm4py)
-        if df[self.timestamp_col].dt.tz is None:
-            # We must use proper timezone addition that doesn't trigger the Timestamp TypeError
-            try:
-                df[self.timestamp_col] = df[self.timestamp_col].dt.tz_localize('UTC')
-            except TypeError:
-                # If cudf proxy still throws TypeError on tz_localize, reconstruct the column
-                # as a strict pandas DatetimeIndex with UTC timezone
-                real_dt = pd.DatetimeIndex(df[self.timestamp_col].to_numpy())
-                df[self.timestamp_col] = real_dt.tz_localize('UTC')
 
         # Null/NaN in case_id and activity
         for col, name in [(self.case_col, 'case_id'), (self.activity_col, 'activity')]:
@@ -164,7 +43,6 @@ class DeviationDetectorAgent:
                 df = df.dropna(subset=[col])
             df[col] = df[col].astype(str)
 
-        # Clean activity names
         df[self.activity_col] = df[self.activity_col].str.strip()
 
         # Remove duplicates
@@ -174,9 +52,8 @@ class DeviationDetectorAgent:
         if dup_count > 0:
             self.quality_report['warnings'].append(f'Удалено {dup_count} полных дубликатов (case+activity+timestamp)')
 
-        # Sort (using sequential stable sort to avoid pandas lexsort AssertionError on DatetimeArray)
-        df = df.sort_values(self.timestamp_col)
-        df = df.sort_values(self.case_col, kind='stable').reset_index(drop=True)
+        # Sort
+        df = df.sort_values([self.case_col, self.timestamp_col]).reset_index(drop=True)
 
         # Single-event cases
         case_sizes = df.groupby(self.case_col).size()
@@ -188,7 +65,7 @@ class DeviationDetectorAgent:
             )
             self.quality_report['single_event_cases_count'] = len(single_event)
 
-        # Formatting for pm4py (bypassing buggy pm4py.format_dataframe for pandas datetimes)
+        # Formatting for pm4py
         df['case:concept:name'] = df[self.case_col]
         df['concept:name'] = df[self.activity_col]
         df['time:timestamp'] = df[self.timestamp_col]
@@ -201,78 +78,57 @@ class DeviationDetectorAgent:
         
         return df, self.quality_report
 
-    def _case_duration_hours(self, df):
-        """Compute per-case total duration in hours (max_ts - min_ts).
-
-        Returns a DataFrame indexed by case_col with column 'duration_h'.
-        Uses numpy to avoid cudf .dt accessor issues.
-        """
-        case_col = 'case:concept:name'
-        ts_col = 'time:timestamp'
-        agg = df.groupby(case_col)[ts_col].agg(['min', 'max'])
-        agg = _ensure_real_pandas(agg)
-        agg['duration_h'] = _ts_diff_hours(agg['max'].values, agg['min'].values)
-        return agg
-
     def add_durations(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Adds durations and context (prev/next) for analyzers.
-        
-        All groupby-shift and timedelta operations use pure numpy
-        to avoid cudf proxy incompatibilities.
-        """
+        """Adds durations and context (prev/next) for analyzers using standard pandas."""
         case_col = 'case:concept:name'
         ts_col = 'time:timestamp'
         act_col = 'concept:name'
         
-        # Escape cudf proxy
-        df = _ensure_real_pandas(df)
+        df = df.sort_values([case_col, ts_col]).reset_index(drop=True)
         
-        df = df.sort_values(ts_col)
-        df = df.sort_values(case_col, kind='stable').reset_index(drop=True)
+        df['next_ts'] = df.groupby(case_col)[ts_col].shift(-1)
         
-        # Extract numpy arrays for pure-numpy operations
-        cases = df[case_col].values
-        timestamps = df[ts_col].values
-        activities = df[act_col].values
-
-        # Shift timestamps by -1 within each case group (next timestamp)
-        next_ts = _groupby_shift(cases, timestamps, -1)
-        
-        # Duration in hours via numpy
-        df['duration_h'] = _ts_diff_hours(next_ts, timestamps)
+        # Duration in hours
+        diff = df['next_ts'] - df[ts_col]
+        df['duration_h'] = diff.dt.total_seconds() / 3600.0
 
         # Protect against negative durations
-        neg = df['duration_h'] < 0
-        if neg.any():
-            df.loc[neg, 'duration_h'] = np.nan
+        df.loc[df['duration_h'] < 0, 'duration_h'] = np.nan
 
-        # Previous and next activities via numpy
-        df['prev_act'] = _groupby_shift(cases, activities, 1)
-        df['next_act'] = _groupby_shift(cases, activities, -1)
+        df['prev_act'] = df.groupby(case_col)[act_col].shift(1)
+        df['next_act'] = df.groupby(case_col)[act_col].shift(-1)
         return df
 
     def run_analysis(self, df: pd.DataFrame) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Runs all 18 deviation detectors. Expects preprocessed DataFrame."""
-        # Escape cudf proxy
-        df = _ensure_real_pandas(df)
-        
+        """Runs all 18 deviation detectors."""
+        if hasattr(df, 'to_pandas'):
+            df = df.to_pandas()
+            
         df_dur = self.add_durations(df)
         
-        # Mapping analyzers to findings
+        # Calculate case durations once
+        case_col = 'case:concept:name'
+        ts_col = 'time:timestamp'
+        case_dur_df = df_dur.groupby(case_col)[ts_col].agg(['min', 'max'])
+        case_dur_df['duration_h'] = (case_dur_df['max'] - case_dur_df['min']).dt.total_seconds() / 3600.0
+
+        # Keep a valid transitions df
+        valid_transitions = df_dur.dropna(subset=['duration_h']).copy()
+        
         self.findings = {
-            'outliers_70': self._detect_duration_outliers(df_dur),
+            'outliers_70': self._detect_duration_outliers(case_dur_df),
             'loops_71_75': self._detect_all_loops(df_dur),
-            'long_cycles_76': self._detect_long_cycles(df_dur),
-            'bottlenecks_77': self._detect_bottlenecks(df_dur),
-            'manual_steps_78': self._detect_manual_steps(df_dur),
-            'one_time_incidents_79': self._detect_one_time_incidents(df_dur),
-            'repeated_incidents_80': self._detect_repeated_incidents(df_dur),
-            'missed_deadlines_81': self._detect_missed_deadlines(df_dur),
-            'critical_steps_82': self._detect_critical_steps(df_dur),
-            'redundant_activities_83': self._detect_redundant_activities(df_dur),
+            'long_cycles_76': self._detect_long_cycles(case_dur_df),
+            'bottlenecks_77': self._detect_bottlenecks(valid_transitions),
+            'manual_steps_78': self._detect_manual_steps(valid_transitions),
+            'one_time_incidents_79': self._detect_one_time_incidents(valid_transitions),
+            'repeated_incidents_80': self._detect_repeated_incidents(valid_transitions),
+            'missed_deadlines_81': self._detect_missed_deadlines(case_dur_df),
+            'critical_steps_82': self._detect_critical_steps(df_dur, case_dur_df),
+            'redundant_activities_83': self._detect_redundant_activities(df_dur, case_dur_df),
             'variability_84': self._detect_high_variability(df_dur),
             'dark_processes_85': self._detect_dark_processes(df_dur),
-            'manual_exceptions_86': self._detect_manual_exceptions(df_dur),
+            'manual_exceptions_86': self._detect_manual_exceptions(valid_transitions),
             'rework_loops_87': self._detect_rework_loops(df_dur)
         }
         
@@ -280,36 +136,29 @@ class DeviationDetectorAgent:
 
     # --- Individual Detectors Implementation ---
 
-    def _detect_duration_outliers(self, df):
-        agg = self._case_duration_hours(df)
-        if agg.empty: return []
-        dur = agg['duration_h'].dropna()
+    def _detect_duration_outliers(self, case_dur_df):
+        if case_dur_df.empty: return []
+        dur = case_dur_df['duration_h'].dropna()
         if dur.empty: return []
         Q1, Q3 = dur.quantile(0.25), dur.quantile(0.75)
         IQR = Q3 - Q1
-        outliers = agg[(agg['duration_h'] < Q1 - 1.5 * IQR) | (agg['duration_h'] > Q3 + 1.5 * IQR)]
+        outliers = case_dur_df[(case_dur_df['duration_h'] < Q1 - 1.5 * IQR) | (case_dur_df['duration_h'] > Q3 + 1.5 * IQR)]
         return outliers.index.tolist()[:10]
 
     def _detect_all_loops(self, df):
         case_col = 'case:concept:name'
         act_col = 'concept:name'
-        df = _ensure_real_pandas(df)
-        df = df.sort_values('time:timestamp')
-        df = df.sort_values(case_col, kind='stable').reset_index(drop=True)
-
-        cases = df[case_col].values
-        acts = df[act_col].values
-
-        df['prev_act'] = _groupby_shift(cases, acts, 1)
-        df['prev2_act'] = _groupby_shift(cases, acts, 2)
-        df['next_act'] = _groupby_shift(cases, acts, -1)
+        
+        df = df.copy()
+        df['prev_act'] = df.groupby(case_col)[act_col].shift(1)
+        df['prev2_act'] = df.groupby(case_col)[act_col].shift(2)
+        df['next_act'] = df.groupby(case_col)[act_col].shift(-1)
         
         results = {
             'self_loops': df[df[act_col] == df['prev_act']][act_col].unique().tolist(),
             'ping_pong': df[(df[act_col] == df['prev2_act']) & (df['prev_act'] == df['next_act'])][act_col].unique().tolist()
         }
         
-        # Returns
         def has_return_val(group):
             seen = set()
             found = []
@@ -325,41 +174,34 @@ class DeviationDetectorAgent:
         
         return results
 
-    def _detect_long_cycles(self, df):
-        agg = self._case_duration_hours(df)
-        if agg.empty: return []
-        dur = agg['duration_h'].dropna()
+    def _detect_long_cycles(self, case_dur_df):
+        if case_dur_df.empty: return []
+        dur = case_dur_df['duration_h'].dropna()
         if dur.empty: return []
         threshold = dur.quantile(0.95)
-        long_cases = agg[agg['duration_h'] > threshold]
+        long_cases = case_dur_df[case_dur_df['duration_h'] > threshold]
         return {'threshold_h': round(float(threshold), 2), 'cases': long_cases.index.tolist()[:5]}
 
-    def _detect_bottlenecks(self, df):
+    def _detect_bottlenecks(self, valid_tdf):
         act_col = 'concept:name'
-        transition_stats = df.dropna(subset=['duration_h']).copy()
-        if transition_stats.empty: return []
-        
-        bottlenecks = transition_stats.groupby([act_col, 'next_act'])['duration_h'].agg(['mean', 'count'])
-        bottlenecks = _ensure_real_pandas(bottlenecks)
+        if valid_tdf.empty: return []
+        bottlenecks = valid_tdf.groupby([act_col, 'next_act'])['duration_h'].agg(['mean', 'count'])
         bottlenecks = bottlenecks[bottlenecks['count'] > 5].sort_values('mean', ascending=False)
         return bottlenecks.head(5).to_dict('index')
 
-    def _detect_manual_steps(self, df):
+    def _detect_manual_steps(self, valid_tdf):
         act_col = 'concept:name'
-        df_valid = df.dropna(subset=['duration_h'])
-        if df_valid.empty: return []
-        stats_agg = df_valid.groupby(act_col)['duration_h'].agg(['mean', 'median', 'std', 'count'])
-        stats_agg = _ensure_real_pandas(stats_agg)
-        stats_agg['cv'] = stats_agg['std'] / stats_agg['mean']
-        stats_agg['mean_median_diff'] = abs(stats_agg['mean'] - stats_agg['median']) / stats_agg['median'].replace(0, np.nan)
-        manual = stats_agg[(stats_agg['mean_median_diff'] < 0.1) & (stats_agg['cv'] > 0.5) & (stats_agg['count'] > 5)]
+        if valid_tdf.empty: return []
+        stats_df = valid_tdf.groupby(act_col)['duration_h'].agg(['mean', 'median', 'std', 'count'])
+        stats_df['cv'] = stats_df['std'] / stats_df['mean']
+        stats_df['mean_median_diff'] = abs(stats_df['mean'] - stats_df['median']) / stats_df['median'].replace(0, np.nan)
+        manual = stats_df[(stats_df['mean_median_diff'] < 0.1) & (stats_df['cv'] > 0.5) & (stats_df['count'] > 5)]
         return manual.head(5).to_dict('index')
 
-    def _detect_one_time_incidents(self, df):
+    def _detect_one_time_incidents(self, valid_tdf):
         act_col = 'concept:name'
-        df_valid = df.dropna(subset=['duration_h'])
         results = []
-        for act, group in df_valid.groupby(act_col):
+        for act, group in valid_tdf.groupby(act_col):
             dur = group['duration_h']
             if len(dur) < 10: continue
             mean_val, med_val = float(dur.mean()), float(dur.median())
@@ -375,34 +217,31 @@ class DeviationDetectorAgent:
                         results.append({'activity': act, 'outliers': len(dur) - len(clean)})
         return results
 
-    def _detect_repeated_incidents(self, df):
+    def _detect_repeated_incidents(self, valid_tdf):
         act_col = 'concept:name'
-        df_valid = df.dropna(subset=['duration_h'])
-        if df_valid.empty: return []
-        stats_agg = df_valid.groupby(act_col)['duration_h'].agg(['mean', 'median', 'std', 'count'])
-        stats_agg = _ensure_real_pandas(stats_agg)
-        stats_agg['cv'] = stats_agg['std'] / stats_agg['mean']
-        stats_agg['diff_pct'] = abs(stats_agg['mean'] - stats_agg['median']) / stats_agg['median'].replace(0, np.nan)
-        repeated = stats_agg[(stats_agg['diff_pct'] > 0.15) & (stats_agg['cv'] > 0.5) & (stats_agg['count'] > 5)]
+        if valid_tdf.empty: return []
+        stats_df = valid_tdf.groupby(act_col)['duration_h'].agg(['mean', 'median', 'std', 'count'])
+        stats_df['cv'] = stats_df['std'] / stats_df['mean']
+        stats_df['diff_pct'] = abs(stats_df['mean'] - stats_df['median']) / stats_df['median'].replace(0, np.nan)
+        repeated = stats_df[(stats_df['diff_pct'] > 0.15) & (stats_df['cv'] > 0.5) & (stats_df['count'] > 5)]
         return repeated.head(5).to_dict('index')
 
-    def _detect_missed_deadlines(self, df):
-        agg = self._case_duration_hours(df)
-        if agg.empty: return []
-        dur = agg['duration_h'].dropna()
+    def _detect_missed_deadlines(self, case_dur_df):
+        if case_dur_df.empty: return []
+        dur = case_dur_df['duration_h'].dropna()
         if dur.empty: return []
         p95 = dur.quantile(0.95)
-        return agg[agg['duration_h'] > p95].index.tolist()[:5]
+        return case_dur_df[case_dur_df['duration_h'] > p95].index.tolist()[:5]
 
-    def _detect_critical_steps(self, df):
+    def _detect_critical_steps(self, df_dur, case_dur_df):
         case_col = 'case:concept:name'
         act_col = 'concept:name'
-        agg = self._case_duration_hours(df)
         
-        act_dur = df.dropna(subset=['duration_h']).groupby([case_col, act_col])['duration_h'].mean().unstack(fill_value=0)
-        act_dur = _ensure_real_pandas(act_dur)
+        act_dur = df_dur.dropna(subset=['duration_h']).groupby([case_col, act_col])['duration_h'].mean().unstack(fill_value=0)
         if act_dur.empty: return []
-        act_dur = act_dur.join(agg[['duration_h']].rename(columns={'duration_h': 'total_h'}))
+        
+        target = case_dur_df[['duration_h']].rename(columns={'duration_h': 'total_h'})
+        act_dur = act_dur.join(target, how='inner')
         
         correlations = {}
         for col in act_dur.columns:
@@ -411,20 +250,19 @@ class DeviationDetectorAgent:
                 if corr > 0.5: correlations[col] = round(float(corr), 2)
         return correlations
 
-    def _detect_redundant_activities(self, df):
+    def _detect_redundant_activities(self, df_dur, case_dur_df):
+        import scipy.stats as stats
         case_col = 'case:concept:name'
         act_col = 'concept:name'
-        total_cases = df[case_col].nunique()
-        act_presence = df.groupby(act_col)[case_col].nunique()
+        total_cases = df_dur[case_col].nunique()
+        act_presence = df_dur.groupby(act_col)[case_col].nunique()
         act_rate = act_presence / total_cases
-        
-        agg = self._case_duration_hours(df)
         
         redundant = []
         for act in act_rate[act_rate < 0.5].index:
-            cases_with = df[df[act_col] == act][case_col].unique()
-            dur_with = agg.loc[agg.index.isin(cases_with), 'duration_h'].dropna()
-            dur_without = agg.loc[~agg.index.isin(cases_with), 'duration_h'].dropna()
+            cases_with = df_dur[df_dur[act_col] == act][case_col].unique()
+            dur_with = case_dur_df.loc[case_dur_df.index.isin(cases_with), 'duration_h'].dropna()
+            dur_without = case_dur_df.loc[~case_dur_df.index.isin(cases_with), 'duration_h'].dropna()
             if len(dur_with) > 5 and len(dur_without) > 5:
                 _, p_val = stats.ttest_ind(dur_with.values, dur_without.values)
                 if p_val > 0.05: redundant.append(act)
@@ -456,33 +294,27 @@ class DeviationDetectorAgent:
         dark_variants = len(variants) - official_count
         return {'dark_variant_count': dark_variants, 'official_coverage': round(cumsum, 2)}
 
-    def _detect_manual_exceptions(self, df):
+    def _detect_manual_exceptions(self, valid_tdf):
         act_col = 'concept:name'
-        df_valid = df.dropna(subset=['duration_h'])
-        if df_valid.empty: return []
-        stats_df = df_valid.groupby(act_col)['duration_h'].agg(['mean', 'std', 'count'])
-        stats_df = _ensure_real_pandas(stats_df)
+        if valid_tdf.empty: return []
+        stats_df = valid_tdf.groupby(act_col)['duration_h'].agg(['mean', 'std', 'count'])
         stats_df['cv'] = stats_df['std'] / stats_df['mean']
-        overall_mean = float(df_valid['duration_h'].mean())
+        overall_mean = float(valid_tdf['duration_h'].mean())
         manual_exc = stats_df[(stats_df['mean'] > overall_mean * 2) & (stats_df['cv'] < 0.3) & (stats_df['count'] > 5)]
         return manual_exc.index.tolist()
 
     def _detect_rework_loops(self, df):
         case_col = 'case:concept:name'
         act_col = 'concept:name'
-        df = _ensure_real_pandas(df)
-        df = df.sort_values('time:timestamp')
-        df = df.sort_values(case_col, kind='stable').reset_index(drop=True)
+        df = df.copy()
         df['pos'] = df.groupby(case_col).cumcount()
         avg_pos = df.groupby(act_col)['pos'].median().sort_values()
         order = {act: i for i, act in enumerate(avg_pos.index)}
         
-        cases = df[case_col].values
-        acts = df[act_col].values
-        df['next_act'] = _groupby_shift(cases, acts, -1)
-
+        df['next_act'] = df.groupby(case_col)[act_col].shift(-1)
         df_trans = df.dropna(subset=['next_act']).copy()
         if df_trans.empty: return []
+        
         df_trans['from_order'] = df_trans[act_col].map(order)
         df_trans['to_order'] = df_trans['next_act'].map(order)
         rework = df_trans[df_trans['to_order'] < df_trans['from_order']]
