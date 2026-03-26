@@ -128,18 +128,33 @@ class DeviationDetectorAgent:
         df = df.copy()
 
         # Parse timestamp
-        parsed_ts = pd.to_datetime(df[self.timestamp_col], infer_datetime_format=True, errors='coerce')
+        # Convert to string first, then to datetime64[ns] to avoid cudf Timestamp array bug
+        ts_values = df[self.timestamp_col].astype(str).values
+        # Use numpy to coerce to datetime64[ns], NaT will be assigned to invalid formats
+        try:
+            parsed_ts = pd.Series(pd.to_datetime(ts_values, format='mixed', errors='coerce'))
+        except Exception:
+            # Fallback if mixed parsing fails
+            parsed_ts = pd.Series(pd.to_datetime(ts_values, errors='coerce'))
+        
         df[self.timestamp_col] = parsed_ts
         
-        # Drop NaT before adding timezone (avoids pandas dtype TypeError)
+        # Drop NaT before adding timezone
         nat_count = int(df[self.timestamp_col].isna().sum())
         if nat_count > 0:
             self.quality_report['warnings'].append(f'Удалено {nat_count} строк с невалидным timestamp (NaT)')
             df = df.dropna(subset=[self.timestamp_col])
 
-        # Localize to UTC if naive (required by pm4py, must be done after dropna)
+        # Localize to UTC if naive (required by pm4py)
         if df[self.timestamp_col].dt.tz is None:
-            df[self.timestamp_col] = df[self.timestamp_col].dt.tz_localize('UTC')
+            # We must use proper timezone addition that doesn't trigger the Timestamp TypeError
+            try:
+                df[self.timestamp_col] = df[self.timestamp_col].dt.tz_localize('UTC')
+            except TypeError:
+                # If cudf proxy still throws TypeError on tz_localize, reconstruct the column
+                # as a strict pandas DatetimeIndex with UTC timezone
+                real_dt = pd.DatetimeIndex(df[self.timestamp_col].to_numpy())
+                df[self.timestamp_col] = real_dt.tz_localize('UTC')
 
         # Null/NaN in case_id and activity
         for col, name in [(self.case_col, 'case_id'), (self.activity_col, 'activity')]:
