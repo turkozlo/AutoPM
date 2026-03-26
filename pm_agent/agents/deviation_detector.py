@@ -29,12 +29,19 @@ class DeviationDetectorAgent:
         df = df.copy()
 
         # 1. Парсинг дат — универсальный метод:
-        # utc=True корректно обрабатывает как строки (CSV), так и уже готовые Timestamp-объекты (XES из pm4py),
-        # нормализуя все timezone в UTC. .dt.tz_localize(None) убирает метку tz, возвращая
-        # naive datetime64[ns] — совместимый как с numpy, так и с pm4py.
-        df[self.timestamp_col] = pd.to_datetime(
-            df[self.timestamp_col], utc=True, errors='coerce'
-        ).dt.tz_localize(None).astype('datetime64[ns]')
+        # Если колонка уже была обработана DataFormatter, пропускаем повторную конвертацию,
+        # так как это вызывает ошибку в cudf/RAPIDS средах.
+        if not pd.api.types.is_datetime64_any_dtype(df[self.timestamp_col]):
+            df[self.timestamp_col] = pd.to_datetime(
+                df[self.timestamp_col], utc=True, errors='coerce'
+            )
+        
+        # В любом случае обеспечиваем naive UTC формат
+        if hasattr(df[self.timestamp_col], 'dt'):
+            if df[self.timestamp_col].dt.tz is not None:
+                df[self.timestamp_col] = df[self.timestamp_col].dt.tz_convert('UTC').dt.tz_localize(None)
+        
+        df[self.timestamp_col] = df[self.timestamp_col].astype('datetime64[ns]')
 
         # Удаление пустых дат
         nat_count = int(df[self.timestamp_col].isna().sum())
@@ -138,10 +145,19 @@ class DeviationDetectorAgent:
         next_ts_raw = df.groupby(case_col)[ts_col].shift(-1)
 
         # Надёжное вычисление через int64-наносекунды.
-        # Используем pd.to_datetime() ПЕРЕД .values.astype('int64'), чтобы гарантировать,
-        # что мы не пытаемся кастить массив объектов (Timestamp) — это кидает TypeError.
-        CUR_INT = pd.to_datetime(df[ts_col]).values.astype('int64')
-        NXT_INT = pd.to_datetime(next_ts_raw, errors='coerce').values.astype('int64')
+        # Защищаемся от лишних вызовов to_datetime, если тип уже верный (важно для cudf).
+        if pd.api.types.is_datetime64_any_dtype(df[ts_col]):
+            CUR_TS = df[ts_col]
+        else:
+            CUR_TS = pd.to_datetime(df[ts_col], errors='coerce')
+        
+        if pd.api.types.is_datetime64_any_dtype(next_ts_raw):
+            NXT_TS = next_ts_raw
+        else:
+            NXT_TS = pd.to_datetime(next_ts_raw, errors='coerce')
+
+        CUR_INT = CUR_TS.values.astype('int64')
+        NXT_INT = NXT_TS.values.astype('int64')
         iNaT = np.iinfo(np.int64).min
         valid = (CUR_INT != iNaT) & (NXT_INT != iNaT)
         duration_ns = np.where(valid, NXT_INT - CUR_INT, np.nan)
@@ -158,9 +174,14 @@ class DeviationDetectorAgent:
         case_col = 'case:concept:name'
         ts_col = 'time:timestamp'
         case_dur = df_dur.groupby(case_col)[ts_col].agg(['min', 'max'])
-        # Та же надёжная арифметика через pd.to_datetime + int64 наносекунды
-        min_int = pd.to_datetime(case_dur['min']).values.astype('int64')
-        max_int = pd.to_datetime(case_dur['max']).values.astype('int64')
+        # Та же надёжная арифметика через pd.to_datetime (только при необходимости) + int64 наносекунды
+        def to_i64(s):
+            if pd.api.types.is_datetime64_any_dtype(s):
+                return s.values.astype('int64')
+            return pd.to_datetime(s, errors='coerce').values.astype('int64')
+
+        min_int = to_i64(case_dur['min'])
+        max_int = to_i64(case_dur['max'])
         case_dur['duration_h'] = (max_int - min_int) / 3.6e12
         return case_dur
 
