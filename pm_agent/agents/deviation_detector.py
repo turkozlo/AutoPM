@@ -34,7 +34,7 @@ class DeviationDetectorAgent:
         # naive datetime64[ns] — совместимый как с numpy, так и с pm4py.
         df[self.timestamp_col] = pd.to_datetime(
             df[self.timestamp_col], utc=True, errors='coerce'
-        ).dt.tz_localize(None)
+        ).dt.tz_localize(None).astype('datetime64[ns]')
 
         # Удаление пустых дат
         nat_count = int(df[self.timestamp_col].isna().sum())
@@ -137,9 +137,10 @@ class DeviationDetectorAgent:
         # Shift для вычисления времени следующего события
         next_ts_raw = df.groupby(case_col)[ts_col].shift(-1)
 
-        # Надёжное вычисление через int64-наносекунды, чтобы избежать
-        # бага с .dt.total_seconds() при object-dtype после groupby.shift
-        CUR_INT = df[ts_col].values.astype('int64')
+        # Надёжное вычисление через int64-наносекунды.
+        # Используем pd.to_datetime() ПЕРЕД .values.astype('int64'), чтобы гарантировать,
+        # что мы не пытаемся кастить массив объектов (Timestamp) — это кидает TypeError.
+        CUR_INT = pd.to_datetime(df[ts_col]).values.astype('int64')
         NXT_INT = pd.to_datetime(next_ts_raw, errors='coerce').values.astype('int64')
         iNaT = np.iinfo(np.int64).min
         valid = (CUR_INT != iNaT) & (NXT_INT != iNaT)
@@ -157,9 +158,9 @@ class DeviationDetectorAgent:
         case_col = 'case:concept:name'
         ts_col = 'time:timestamp'
         case_dur = df_dur.groupby(case_col)[ts_col].agg(['min', 'max'])
-        # Та же надёжная арифметика через int64 наносекунды
-        min_int = case_dur['min'].values.astype('int64')
-        max_int = case_dur['max'].values.astype('int64')
+        # Та же надёжная арифметика через pd.to_datetime + int64 наносекунды
+        min_int = pd.to_datetime(case_dur['min']).values.astype('int64')
+        max_int = pd.to_datetime(case_dur['max']).values.astype('int64')
         case_dur['duration_h'] = (max_int - min_int) / 3.6e12
         return case_dur
 
