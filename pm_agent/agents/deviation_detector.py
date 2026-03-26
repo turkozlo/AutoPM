@@ -127,8 +127,13 @@ class DeviationDetectorAgent:
 
         df = df.copy()
 
-        # Parse timestamp
-        df[self.timestamp_col] = pd.to_datetime(df[self.timestamp_col], infer_datetime_format=True, errors='coerce')
+        # Parse timestamp and ensure it is timezone-aware (required by pm4py)
+        # Attempt to parse
+        parsed_ts = pd.to_datetime(df[self.timestamp_col], infer_datetime_format=True, errors='coerce')
+        # Localize to UTC if naive (no timezone)
+        if parsed_ts.dt.tz is None:
+            parsed_ts = parsed_ts.dt.tz_localize('UTC')
+        df[self.timestamp_col] = parsed_ts
         nat_count = int(df[self.timestamp_col].isna().sum())
         if nat_count > 0:
             self.quality_report['warnings'].append(f'Удалено {nat_count} строк с невалидным timestamp (NaT)')
