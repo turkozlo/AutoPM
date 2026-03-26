@@ -308,7 +308,16 @@ def main():
         # 5. Column Mapping
         column_roles = map_columns(df)
 
-        # 6. Deviation Detection
+        # 6. Format Data (Force correct types BEFORE analysis)
+        print("\nFormatting data types using DataFormatter...")
+        try:
+            formatter = DataFormatterAgent(df, llm_client)
+            df = formatter.run()
+            print("Data formatting complete.")
+        except Exception as e:
+            print(f"⚠️ Formatting failed: {e}. Proceeding with original data.")
+
+        # 7. Deviation Detection
         print("\nRunning Deviation Detection...")
         try:
             detector = DeviationDetectorAgent(
@@ -332,15 +341,6 @@ def main():
             print(f"Deviation detection failed: {e}")
             traceback.print_exc()
             findings_summary = "Deviation detection was skipped or failed due to an error."
-
-        # 7. Format Data
-        print("\nFormatting data types using DataFormatter...")
-        try:
-            formatter = DataFormatterAgent(df, llm_client)
-            df = formatter.run()
-            print("Data formatting complete.")
-        except Exception as e:
-            print(f"⚠️ Formatting failed: {e}. Proceeding with clean data.")
 
         # 8. Save session
         save_session(session_dir, df, column_roles, file_path, findings_summary)
