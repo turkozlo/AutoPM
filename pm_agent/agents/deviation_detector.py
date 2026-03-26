@@ -1,21 +1,22 @@
 import pandas as pd
 import numpy as np
 import pm4py
-from typing import Dict, List, Any, Tuple
+from typing import Dict, Any, Tuple, List
 
 
 class DeviationDetectorAgent:
+    """
+    Агент для поиска базовых неэффективностей (девиаций) в логе процесса (Event Log).
+    Возвращает напрямую DataFrame со всеми обнаруженными отклонениями.
+    """
+
     def __init__(self, case_col: str, activity_col: str, timestamp_col: str):
         self.case_col = case_col
         self.activity_col = activity_col
         self.timestamp_col = timestamp_col
         self.quality_report = {}
-        self.findings = {}
 
     def preprocess_event_log(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-        """
-        Standard pandas preprocessing of event log.
-        """
         if hasattr(df, 'to_pandas'):
             df = df.to_pandas()
 
@@ -27,21 +28,21 @@ class DeviationDetectorAgent:
 
         df = df.copy()
 
-        # 1) Парсим БЕЗ utc=True — получаем naive datetime64[ns],
-        #    чтобы dropna не падало на старых версиях pandas
-        df[self.timestamp_col] = pd.to_datetime(
-            df[self.timestamp_col], errors='coerce'
-        )
+        # 1. Парсинг дат
+        df[self.timestamp_col] = pd.to_datetime(df[self.timestamp_col], format='mixed', errors='coerce')
 
-        # 2) Удаляем NaT — dropna корректно работает с naive datetime
+        # Удаление пустых дат
         nat_count = int(df[self.timestamp_col].isna().sum())
         if nat_count > 0:
-            self.quality_report['warnings'].append(
-                f'Удалено {nat_count} строк с невалидным timestamp (NaT)'
-            )
+            self.quality_report['warnings'].append(f'Удалено {nat_count} строк с невалидным timestamp (NaT)')
             df = df.dropna(subset=[self.timestamp_col])
 
-        # 3) Локализуем в UTC уже после очистки
+        # 2. Безопасная сортировка (обход бага Pandas 3.12 с сортировкой DatetimeArray)
+        df['_sort_ts'] = df[self.timestamp_col].astype('int64')
+        df = df.sort_values([self.case_col, '_sort_ts']).reset_index(drop=True)
+        df = df.drop(columns=['_sort_ts'])
+
+        # Локализация времени после безопасной сортировки (чтобы избежать бага)
         if df[self.timestamp_col].dt.tz is None:
             df[self.timestamp_col] = df[self.timestamp_col].dt.tz_localize('UTC')
         else:
@@ -51,9 +52,7 @@ class DeviationDetectorAgent:
         for col, name in [(self.case_col, 'case_id'), (self.activity_col, 'activity')]:
             na_count = int(df[col].isna().sum())
             if na_count > 0:
-                self.quality_report['warnings'].append(
-                    f'Удалено {na_count} строк с пустым {name}'
-                )
+                self.quality_report['warnings'].append(f'Удалено {na_count} строк с пустым {name}')
                 df = df.dropna(subset=[col])
             df[col] = df[col].astype(str)
 
@@ -61,19 +60,10 @@ class DeviationDetectorAgent:
 
         # Remove duplicates
         before = len(df)
-        df = df.drop_duplicates(
-            subset=[self.case_col, self.activity_col, self.timestamp_col]
-        )
+        df = df.drop_duplicates(subset=[self.case_col, self.activity_col, self.timestamp_col])
         dup_count = before - len(df)
         if dup_count > 0:
-            self.quality_report['warnings'].append(
-                f'Удалено {dup_count} полных дубликатов (case+activity+timestamp)'
-            )
-
-        # Sort
-        df = df.sort_values(
-            [self.case_col, self.timestamp_col]
-        ).reset_index(drop=True)
+            self.quality_report['warnings'].append(f'Удалено {dup_count} полных дубликатов (case+activity+timestamp)')
 
         # Single-event cases
         case_sizes = df.groupby(self.case_col).size()
@@ -81,812 +71,367 @@ class DeviationDetectorAgent:
         if len(single_event) > 0:
             self.quality_report['warnings'].append(
                 f'Обнаружено {len(single_event)} кейсов с одним событием '
-                f'({len(single_event) / len(case_sizes) * 100:.1f}%) '
                 f'— они исключены из временного анализа'
             )
-            self.quality_report['single_event_cases_count'] = len(single_event)
 
         # Formatting for pm4py
         df['case:concept:name'] = df[self.case_col]
         df['concept:name'] = df[self.activity_col]
         df['time:timestamp'] = df[self.timestamp_col]
 
-        # Stats
         self.quality_report['clean_rows'] = len(df)
         self.quality_report['clean_cases'] = df['case:concept:name'].nunique()
         self.quality_report['unique_activities'] = df['concept:name'].nunique()
-        self.quality_report['date_range'] = (
-            df['time:timestamp'].min(),
-            df['time:timestamp'].max()
-        )
+        self.quality_report['date_range'] = (df['time:timestamp'].min(), df['time:timestamp'].max())
 
         return df, self.quality_report
 
-    def add_durations(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Adds durations and context (prev/next) for analyzers using standard pandas."""
-        case_col = 'case:concept:name'
-        ts_col = 'time:timestamp'
-        act_col = 'concept:name'
-
-        df = df.sort_values([case_col, ts_col]).reset_index(drop=True)
-
-        df['next_ts'] = df.groupby(case_col)[ts_col].shift(-1)
-
-        # Duration in hours
-        diff = df['next_ts'] - df[ts_col]
-        df['duration_h'] = diff.dt.total_seconds() / 3600.0
-
-        # Protect against negative durations
-        df.loc[df['duration_h'] < 0, 'duration_h'] = np.nan
-
-        df['prev_act'] = df.groupby(case_col)[act_col].shift(1)
-        df['next_act'] = df.groupby(case_col)[act_col].shift(-1)
-        return df
-
-    def run_analysis(self, df: pd.DataFrame) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Runs all deviation detectors."""
+    def run_analysis(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """
+        Запускает все базовые детекторы отклонений и возвращает 
+        датасет с результатами (pandas DataFrame) и отчет по качеству.
+        """
         if hasattr(df, 'to_pandas'):
             df = df.to_pandas()
 
-        df_dur = self.add_durations(df)
-
-        # Calculate case durations once
-        case_col = 'case:concept:name'
-        ts_col = 'time:timestamp'
-        case_dur_df = df_dur.groupby(case_col)[ts_col].agg(['min', 'max'])
-        case_dur_df['duration_h'] = (
-            (case_dur_df['max'] - case_dur_df['min']).dt.total_seconds() / 3600.0
-        )
-
-        # Keep a valid transitions df
+        df_dur = self._add_durations(df)
+        case_dur_df = self._calculate_case_durations(df_dur)
         valid_transitions = df_dur.dropna(subset=['duration_h']).copy()
 
-        self.findings = {
-            'outliers_70': self._detect_duration_outliers(case_dur_df),
-            'loops_71_75': self._detect_all_loops(df_dur),
-            'long_cycles_76': self._detect_long_cycles(case_dur_df),
-            'bottlenecks_77': self._detect_bottlenecks(valid_transitions),
-            'manual_steps_78': self._detect_manual_steps(valid_transitions),
-            'one_time_incidents_79': self._detect_one_time_incidents(valid_transitions),
-            'repeated_incidents_80': self._detect_repeated_incidents(valid_transitions),
-            'missed_deadlines_81': self._detect_missed_deadlines(case_dur_df),
-            'critical_steps_82': self._detect_critical_steps(df_dur, case_dur_df),
-            'redundant_activities_83': self._detect_redundant_activities(df_dur, case_dur_df),
-            'variability_84': self._detect_high_variability(df_dur),
-            'dark_processes_85': self._detect_dark_processes(df_dur),
-            'manual_exceptions_86': self._detect_manual_exceptions(valid_transitions),
-            'rework_loops_87': self._detect_rework_loops(df_dur),
-        }
+        deviations = []
 
-        return self.findings, self.quality_report
+        # Запускаем все проверки. Каждая функция возвращает список словарей (строк для датасета)
+        deviations.extend(self._detect_loops(df_dur))
+        deviations.extend(self._detect_long_cycles_and_deadlines(case_dur_df))
+        deviations.extend(self._detect_bottlenecks(valid_transitions))
+        deviations.extend(self._detect_incidents_and_manual_steps(valid_transitions))
+        deviations.extend(self._detect_critical_steps(df_dur, case_dur_df))
+        deviations.extend(self._detect_redundant_activities(df_dur, case_dur_df))
+        deviations.extend(self._detect_variability_and_dark_processes(df))
+        deviations.extend(self._detect_rework_loops(valid_transitions))
 
-    # --- Individual Detectors Implementation ---
+        # Собираем DataFrame
+        columns = ['deviation_category', 'deviation_name', 'object_id', 'metric', 'description']
+        if not deviations:
+            findings_df = pd.DataFrame(columns=columns)
+        else:
+            findings_df = pd.DataFrame(deviations, columns=columns)
 
-    def _detect_duration_outliers(self, case_dur_df):
-        if case_dur_df.empty:
-            return []
-        dur = case_dur_df['duration_h'].dropna()
-        if dur.empty:
-            return []
-        Q1, Q3 = dur.quantile(0.25), dur.quantile(0.75)
-        IQR = Q3 - Q1
-        outliers = case_dur_df[
-            (case_dur_df['duration_h'] < Q1 - 1.5 * IQR)
-            | (case_dur_df['duration_h'] > Q3 + 1.5 * IQR)
-        ]
-        return outliers.index.tolist()[:10]
+        self.findings_df = findings_df
+        return self.findings_df, self.quality_report
 
-    def _detect_all_loops(self, df):
+    # --- Внутренние методы подготовки данных ---
+
+    def _add_durations(self, df: pd.DataFrame) -> pd.DataFrame:
         case_col = 'case:concept:name'
+        ts_col = 'time:timestamp'
         act_col = 'concept:name'
 
-        df = df.copy()
+        # Сортировка перед shift:
+        df['_sort_ts'] = df[ts_col].astype('int64')
+        df = df.sort_values([case_col, '_sort_ts']).reset_index(drop=True)
+        df = df.drop(columns=['_sort_ts'])
+
+        df['next_ts'] = df.groupby(case_col)[ts_col].shift(-1)
+        df['duration_h'] = (df['next_ts'] - df[ts_col]).dt.total_seconds() / 3600.0
+        df.loc[df['duration_h'] < 0, 'duration_h'] = np.nan
+
         df['prev_act'] = df.groupby(case_col)[act_col].shift(1)
         df['prev2_act'] = df.groupby(case_col)[act_col].shift(2)
         df['next_act'] = df.groupby(case_col)[act_col].shift(-1)
+        return df
 
-        results = {
-            'self_loops': df[df[act_col] == df['prev_act']][act_col].unique().tolist(),
-            'ping_pong': df[
-                (df[act_col] == df['prev2_act']) & (df['prev_act'] == df['next_act'])
-            ][act_col].unique().tolist(),
-        }
+    def _calculate_case_durations(self, df_dur: pd.DataFrame) -> pd.DataFrame:
+        case_col = 'case:concept:name'
+        ts_col = 'time:timestamp'
+        case_dur = df_dur.groupby(case_col)[ts_col].agg(['min', 'max'])
+        case_dur['duration_h'] = (case_dur['max'] - case_dur['min']).dt.total_seconds() / 3600.0
+        return case_dur
 
-        def has_return_val(group):
-            seen = set()
-            found = []
-            for act in group[act_col]:
-                if act in seen:
-                    found.append(act)
-                seen.add(act)
-            return list(set(found))
+    # --- Детекторы базовых неэффективностей ---
 
-        returns = df.groupby(case_col).apply(has_return_val)
-        all_returns = set()
-        for r in returns:
-            all_returns.update(r)
-        results['returns'] = list(all_returns)
-
-        return results
-
-    def _detect_long_cycles(self, case_dur_df):
-        if case_dur_df.empty:
-            return []
-        dur = case_dur_df['duration_h'].dropna()
-        if dur.empty:
-            return []
-        threshold = dur.quantile(0.95)
-        long_cases = case_dur_df[case_dur_df['duration_h'] > threshold]
+    def _create_row(self, category: str, name: str, obj: Any, metric: str, desc: str) -> dict:
         return {
-            'threshold_h': round(float(threshold), 2),
-            'cases': long_cases.index.tolist()[:5],
+            'deviation_category': category,
+            'deviation_name': name,
+            'object_id': str(obj),
+            'metric': metric,
+            'description': desc
         }
 
-    def _detect_bottlenecks(self, valid_tdf):
-        act_col = 'concept:name'
-        if valid_tdf.empty:
-            return []
-        bottlenecks = valid_tdf.groupby([act_col, 'next_act'])['duration_h'].agg(
-            ['mean', 'count']
-        )
-        bottlenecks = bottlenecks[bottlenecks['count'] > 5].sort_values(
-            'mean', ascending=False
-        )
-        return bottlenecks.head(5).to_dict('index')
-
-    def _detect_manual_steps(self, valid_tdf):
-        act_col = 'concept:name'
-        if valid_tdf.empty:
-            return []
-        stats_df = valid_tdf.groupby(act_col)['duration_h'].agg(
-            ['mean', 'median', 'std', 'count']
-        )
-        stats_df['cv'] = stats_df['std'] / stats_df['mean']
-        stats_df['mean_median_diff'] = (
-            abs(stats_df['mean'] - stats_df['median'])
-            / stats_df['median'].replace(0, np.nan)
-        )
-        manual = stats_df[
-            (stats_df['mean_median_diff'] < 0.1)
-            & (stats_df['cv'] > 0.5)
-            & (stats_df['count'] > 5)
-        ]
-        return manual.head(5).to_dict('index')
-
-    def _detect_one_time_incidents(self, valid_tdf):
+    def _detect_loops(self, df: pd.DataFrame) -> List[dict]:
         act_col = 'concept:name'
         results = []
-        for act, group in valid_tdf.groupby(act_col):
-            dur = group['duration_h']
-            if len(dur) < 10:
-                continue
-            mean_val, med_val = float(dur.mean()), float(dur.median())
-            diff_pct = abs(mean_val - med_val) / med_val if med_val > 0 else 0
-            if diff_pct > 0.1:
-                Q1, Q3 = float(dur.quantile(0.25)), float(dur.quantile(0.75))
-                IQR = Q3 - Q1
-                clean = dur[(dur >= Q1 - 1.5 * IQR) & (dur <= Q3 + 1.5 * IQR)]
-                if not clean.empty:
-                    clean_med = float(clean.median())
-                    clean_diff = (
-                        abs(float(clean.mean()) - clean_med) / clean_med
-                        if clean_med > 0
-                        else 0
-                    )
-                    if clean_diff < 0.1:
-                        results.append({
-                            'activity': act,
-                            'outliers': len(dur) - len(clean),
-                        })
+
+        # 1. Самоповтор (Self-loop)
+        self_loops = df[df[act_col] == df['prev_act']][act_col].unique()
+        for act in self_loops:
+            results.append(self._create_row(
+                'Зацикленность (общая)', 'Зацикленность «в себя» (Self-loop)', act, None,
+                'Немедленное повторение того же этапа. Указывает на техническое дублирование'
+            ))
+
+        # 2. Пинг-понг 
+        ping_pong = df[(df[act_col] == df['prev2_act']) & (df['prev_act'] == df['next_act'])][act_col].unique()
+        for act in ping_pong:
+            results.append(self._create_row(
+                'Зацикленность (общая)', 'Зацикленность «Пинг-понг»', act, None,
+                'Повторение пары операций (A-B-A). Характерно для доработок'
+            ))
+
+        # 3. Возвраты
+        def get_returns(group):
+            seen, found = set(), set()
+            for act in group:
+                if act in seen: found.add(act)
+                seen.add(act)
+            return list(found)
+            
+        returns_series = df.groupby('case:concept:name')[act_col].apply(get_returns)
+        all_returns = set(x for lst in returns_series for x in lst)
+        
+        for act in all_returns:
+            results.append(self._create_row(
+                'Зацикленность (общая)', 'Зацикленность «возврат»', act, None,
+                'Повторение операции после других действий. Признак переделок'
+            ))
+
         return results
 
-    def _detect_repeated_incidents(self, valid_tdf):
-        act_col = 'concept:name'
-        if valid_tdf.empty:
-            return []
-        stats_df = valid_tdf.groupby(act_col)['duration_h'].agg(
-            ['mean', 'median', 'std', 'count']
-        )
-        stats_df['cv'] = stats_df['std'] / stats_df['mean']
-        stats_df['diff_pct'] = (
-            abs(stats_df['mean'] - stats_df['median'])
-            / stats_df['median'].replace(0, np.nan)
-        )
-        repeated = stats_df[
-            (stats_df['diff_pct'] > 0.15)
-            & (stats_df['cv'] > 0.5)
-            & (stats_df['count'] > 5)
-        ]
-        return repeated.head(5).to_dict('index')
-
-    def _detect_missed_deadlines(self, case_dur_df):
-        if case_dur_df.empty:
-            return []
+    def _detect_long_cycles_and_deadlines(self, case_dur_df: pd.DataFrame) -> List[dict]:
         dur = case_dur_df['duration_h'].dropna()
-        if dur.empty:
-            return []
+        if dur.empty: return []
+        
+        results = []
         p95 = dur.quantile(0.95)
-        return case_dur_df[case_dur_df['duration_h'] > p95].index.tolist()[:5]
+        
+        long_cases = case_dur_df[case_dur_df['duration_h'] > p95]
+        for case_id, row in long_cases.iterrows():
+            results.append(self._create_row(
+                'Долгий цикл (Long Cycle Time)', 'Долгий цикл', case_id, f"Длительность: {row['duration_h']:.2f}ч",
+                'Превышение времени выполнения процесса над нормативом'
+            ))
+            results.append(self._create_row(
+                'Пропущенные дедлайны', 'Нарушение SLA', case_id, 'Топ-5% по длительности',
+                'Кейс находится в топ-5% самых долгих, возможен срыв сроков'
+            ))
+            
+        # Outliers (IQR)
+        Q1, Q3 = dur.quantile(0.25), dur.quantile(0.75)
+        IQR = Q3 - Q1
+        outliers = case_dur_df[(case_dur_df['duration_h'] < Q1 - 1.5 * IQR) | (case_dur_df['duration_h'] > Q3 + 1.5 * IQR)]
+        for case_id, row in outliers.head(10).iterrows():
+            results.append(self._create_row(
+                'Аномалии (Outliers)', 'Выброс длительности кейса', case_id, f"{row['duration_h']:.2f}ч",
+                'Статистически значимое отклонение длительности кейса от нормы (по IQR)'
+            ))
+            
+        return results
 
-    def _detect_critical_steps(self, df_dur, case_dur_df):
-        case_col = 'case:concept:name'
+    def _detect_bottlenecks(self, valid_tdf: pd.DataFrame) -> List[dict]:
+        if valid_tdf.empty: return []
         act_col = 'concept:name'
+        
+        bottlenecks = valid_tdf.groupby([act_col, 'next_act'])['duration_h'].agg(['mean', 'count'])
+        bottlenecks = bottlenecks[bottlenecks['count'] > 5].sort_values('mean', ascending=False).head(5)
+        
+        results = []
+        for (a1, a2), row in bottlenecks.iterrows():
+            transition = f"{a1} -> {a2}"
+            results.append(self._create_row(
+                'Узкое место (Bottleneck)', 'Узкое место на переходе', transition, f"Ожидание в среднем: {row['mean']:.2f}ч",
+                'Этап вызывает систематические задержки из-за высокой нагрузки'
+            ))
+        return results
 
-        act_dur = (
-            df_dur.dropna(subset=['duration_h'])
-            .groupby([case_col, act_col])['duration_h']
-            .mean()
-            .unstack(fill_value=0)
-        )
-        if act_dur.empty:
-            return []
+    def _detect_incidents_and_manual_steps(self, valid_tdf: pd.DataFrame) -> List[dict]:
+        if valid_tdf.empty: return []
+        act_col = 'concept:name'
+        
+        stats = valid_tdf.groupby(act_col)['duration_h'].agg(['mean', 'median', 'std', 'count'])
+        stats['cv'] = stats['std'] / stats['mean'].replace(0, np.nan)
+        stats['diff_pct'] = abs(stats['mean'] - stats['median']) / stats['median'].replace(0, np.nan)
+        
+        results = []
+        
+        # Ручные шаги / Нестандартизированные
+        manual = stats[(stats['diff_pct'] < 0.1) & (stats['cv'] > 0.5) & (stats['count'] > 5)].head(5)
+        for act, row in manual.iterrows():
+            results.append(self._create_row(
+                'Нестандартизированный (ручной) этап', 'Высокая вариативность шага', act, f"CV: {row['cv']:.2f}",
+                'Длительность зависит от человеческого фактора (высокое станд. отклонение)'
+            ))
+            
+        # Систематические инциденты
+        repeated = stats[(stats['diff_pct'] > 0.15) & (stats['cv'] > 0.5) & (stats['count'] > 5)].head(5)
+        for act, row in repeated.iterrows():
+            results.append(self._create_row(
+                'Многократные инциденты', 'Регулярные сбои операции', act, f"Отклонение mean от median: {row['diff_pct']:.0%}",
+                'Систематические ошибки, вызывающие долгие зависания операций'
+            ))
+            
+        # Разовые инциденты (через IQR)
+        for act, group in valid_tdf.groupby(act_col):
+            dur = group['duration_h'].dropna()
+            if len(dur) < 10: continue
+            
+            Q1, Q3 = dur.quantile(0.25), dur.quantile(0.75)
+            clean = dur[(dur >= Q1 - 1.5 * (Q3 - Q1)) & (dur <= Q3 + 1.5 * (Q3 - Q1))]
+            outliers_count = len(dur) - len(clean)
+            
+            if outliers_count > 0:
+                clean_med = clean.median()
+                clean_diff = abs(clean.mean() - clean_med) / clean_med if clean_med > 0 else 0
+                if clean_diff < 0.1 and abs(dur.mean() - dur.median()) / dur.median() > 0.1:
+                    results.append(self._create_row(
+                        'Разовые инциденты', 'Аномальный сбой', act, f"Аномалий: {outliers_count} шт",
+                        'Единичные длительные операции на фоне нормального выполнения'
+                    ))
+                    
+        # Ручные исключения (очень долгие, но стабильные операции)
+        overall_mean = valid_tdf['duration_h'].mean()
+        manual_exc = stats[(stats['mean'] > overall_mean * 2) & (stats['cv'] < 0.3) & (stats['count'] > 5)]
+        for act, row in manual_exc.iterrows():
+            results.append(self._create_row(
+                'Ручные исключения (Manual Exceptions)', 'Требует подтверждения', act, f"Дольше среднего в {row['mean']/overall_mean:.1f} раз",
+                'Долгие операции с низкой вариативностью (возможно, ручное согласование)'
+            ))
+            
+        return results
+
+    def _detect_critical_steps(self, df_dur: pd.DataFrame, case_dur_df: pd.DataFrame) -> List[dict]:
+        act_dur = df_dur.dropna(subset=['duration_h']).groupby(['case:concept:name', 'concept:name'])['duration_h'].mean().unstack(fill_value=0)
+        if act_dur.empty: return []
 
         target = case_dur_df[['duration_h']].rename(columns={'duration_h': 'total_h'})
         act_dur = act_dur.join(target, how='inner')
 
-        correlations = {}
-        for col in act_dur.columns:
-            if col != 'total_h' and act_dur[col].std() > 0:
+        results = []
+        for col in [c for c in act_dur.columns if c != 'total_h']:
+            if act_dur[col].std() > 0:
                 corr = act_dur[col].corr(act_dur['total_h'])
                 if corr > 0.5:
-                    correlations[col] = round(float(corr), 2)
-        return correlations
+                    results.append(self._create_row(
+                        'Критически важный этап', 'Высокая корреляция с итогом', col, f"Корреляция: {corr:.2f}",
+                        'Длительность этой операции наиболее сильно влияет на общую длительность всего процесса'
+                    ))
+        return results
 
-    def _detect_redundant_activities(self, df_dur, case_dur_df):
+    def _detect_redundant_activities(self, df_dur: pd.DataFrame, case_dur_df: pd.DataFrame) -> List[dict]:
         import scipy.stats as stats
-
-        case_col = 'case:concept:name'
-        act_col = 'concept:name'
-        total_cases = df_dur[case_col].nunique()
-        act_presence = df_dur.groupby(act_col)[case_col].nunique()
-        act_rate = act_presence / total_cases
-
-        redundant = []
+        total_cases = df_dur['case:concept:name'].nunique()
+        act_rate = df_dur.groupby('concept:name')['case:concept:name'].nunique() / total_cases
+        
+        results = []
         for act in act_rate[act_rate < 0.5].index:
-            cases_with = df_dur[df_dur[act_col] == act][case_col].unique()
-            dur_with = case_dur_df.loc[
-                case_dur_df.index.isin(cases_with), 'duration_h'
-            ].dropna()
-            dur_without = case_dur_df.loc[
-                ~case_dur_df.index.isin(cases_with), 'duration_h'
-            ].dropna()
+            cases_with_act = df_dur[df_dur['concept:name'] == act]['case:concept:name'].unique()
+            dur_with = case_dur_df.loc[case_dur_df.index.isin(cases_with_act), 'duration_h'].dropna()
+            dur_without = case_dur_df.loc[~case_dur_df.index.isin(cases_with_act), 'duration_h'].dropna()
+            
             if len(dur_with) > 5 and len(dur_without) > 5:
-                _, p_val = stats.ttest_ind(dur_with.values, dur_without.values)
+                # Если наличие активности не замедляет и не ускоряет кейс
+                stat, p_val = stats.ttest_ind(dur_with.values, dur_without.values)
                 if p_val > 0.05:
-                    redundant.append(act)
-        return redundant
+                    results.append(self._create_row(
+                        'Избыточные шаги (Redundant', 'Шаг не добавляющий ценности', act, None,
+                        'Этап не влияет на конечную длительность и проходится не всеми'
+                    ))
+        return results
 
-    def _detect_high_variability(self, df):
-        variants = pm4py.get_variants(df)
-        total_cases = sum(variants.values())
-        if total_cases == 0:
-            return {}
-        n_variants = len(variants)
-        return {
-            'variant_count': n_variants,
-            'ratio': round(n_variants / total_cases, 2),
-            'high': (n_variants / total_cases) > 0.3,
-        }
+    def _detect_variability_and_dark_processes(self, df: pd.DataFrame) -> List[dict]:
+        results = []
+        try:
+            variants = pm4py.get_variants(df)
+            total = sum(variants.values())
+            if total == 0: return results
+            
+            n_variants = len(variants)
+            ratio = n_variants / total
+            
+            if ratio > 0.3:
+                results.append(self._create_row(
+                    'Вариативность (High Variability)', 'Множество путей', 'Весь процесс', f"Ratio: {ratio:.2f}",
+                    'Слишком много альтернативных путей. Снижает предсказуемость'
+                ))
+                
+            sorted_v = sorted(variants.items(), key=lambda x: -x[1])
+            cumsum = 0
+            official_count = 0
+            for _, count in sorted_v:
+                cumsum += count / total
+                official_count += 1
+                if cumsum >= 0.8:
+                    break
+                    
+            dark_variants = n_variants - official_count
+            if dark_variants > 0:
+                results.append(self._create_row(
+                    'Скрытые сценарии (Dark Processes)', 'Неформализованные пути', 'Весь процесс', f"Редких путей: {dark_variants}",
+                    'Сотни редких путей выполнения, отсутствующих в стандартных регламентах'
+                ))
+        except Exception as e:
+            pass # Если pm4py сломается, проигнорируем
+        return results
 
-    def _detect_dark_processes(self, df):
-        variants = pm4py.get_variants(df)
-        total = sum(variants.values())
-        if total == 0:
-            return {}
-        sorted_v = sorted(variants.items(), key=lambda x: -x[1])
-        cumsum = 0
-        official_count = 0
-        for _, count in sorted_v:
-            cumsum += count / total
-            official_count += 1
-            if cumsum >= 0.8:
-                break
-
-        dark_variants = len(variants) - official_count
-        return {
-            'dark_variant_count': dark_variants,
-            'official_coverage': round(cumsum, 2),
-        }
-
-    def _detect_manual_exceptions(self, valid_tdf):
-        act_col = 'concept:name'
-        if valid_tdf.empty:
-            return []
-        stats_df = valid_tdf.groupby(act_col)['duration_h'].agg(['mean', 'std', 'count'])
-        stats_df['cv'] = stats_df['std'] / stats_df['mean']
-        overall_mean = float(valid_tdf['duration_h'].mean())
-        manual_exc = stats_df[
-            (stats_df['mean'] > overall_mean * 2)
-            & (stats_df['cv'] < 0.3)
-            & (stats_df['count'] > 5)
-        ]
-        return manual_exc.index.tolist()
-
-    def _detect_rework_loops(self, df):
+    def _detect_rework_loops(self, valid_tdf: pd.DataFrame) -> List[dict]:
         case_col = 'case:concept:name'
         act_col = 'concept:name'
-        df = df.copy()
+        
+        df = valid_tdf.copy()
         df['pos'] = df.groupby(case_col).cumcount()
         avg_pos = df.groupby(act_col)['pos'].median().sort_values()
         order = {act: i for i, act in enumerate(avg_pos.index)}
 
-        df['next_act'] = df.groupby(case_col)[act_col].shift(-1)
-        df_trans = df.dropna(subset=['next_act']).copy()
-        if df_trans.empty:
-            return []
+        df['from_order'] = df[act_col].map(order)
+        df['to_order'] = df['next_act'].map(order)
+        rework = df[df['to_order'] < df['from_order']]
 
-        df_trans['from_order'] = df_trans[act_col].map(order)
-        df_trans['to_order'] = df_trans['next_act'].map(order)
-        rework = df_trans[df_trans['to_order'] < df_trans['from_order']]
-
-        rework_summary = rework.groupby([act_col, 'next_act']).size().sort_values(
-            ascending=False
-        )
-        return rework_summary.head(5).to_dict()
-
-    # --- Result Formatting for Report ---
+        if rework.empty: return []
+        
+        rework_summary = rework.groupby([act_col, 'next_act']).size().sort_values(ascending=False).head(5)
+        
+        results = []
+        for (a1, a2), count in rework_summary.items():
+            transition = f"{a1} -> {a2}"
+            results.append(self._create_row(
+                'Обратные потоки (Rework Loops)', 'Возврат на предыдущий этап', transition, f"Кол-во: {count}",
+                'Сущность возвращается на этап, который типично выполняется раньше в процессе'
+            ))
+        return results
 
     def get_summary_text(self) -> str:
-        """Generates a human-readable summary of findings. Only found deviations are shown."""
+        """Generates a human-readable summary of findings from the findings_df."""
         lines = ["## 🔍 Результаты анализа отклонений процесса"]
-        found_count = 0
-
-        # 1. Outliers
-        outliers = self.findings.get('outliers_70', [])
-        if outliers:
-            found_count += 1
-            lines.append(f"### {found_count}. Аномалии (Outliers)")
-            lines.append(
-                "> Редкие или статистически значимые события, "
-                "которые существенно отклоняются от нормы."
-            )
-            lines.append(f"**Найдены**: {', '.join(str(o) for o in outliers)}")
-            lines.append(
-                f"*Где искать:* Проверьте кейсы "
-                f"{', '.join(str(o) for o in outliers[:5])} "
-                f"на предмет ошибок ввода данных или уникальных сбоев."
-            )
-
-        # 2-6. Loops
-        loops = self.findings.get('loops_71_75', {})
-        if any(loops.values()):
-            found_count += 1
-            lines.append(f"### {found_count}. Зацикленность (общая)")
-            lines.append(
-                "> Любые случаи повторного возникновения операции "
-                "в рамках одного кейса."
-            )
-            lines.append("**Обнаружена**")
-
-        if loops.get('self_loops'):
-            found_count += 1
-            lines.append(f"### {found_count}. Зацикленность «в себя» (Self-loop)")
-            lines.append(
-                "> Немедленное повторение того же этапа. "
-                "Часто указывает на техническое дублирование записей."
-            )
-            lines.append(
-                f"**Найдены**: {', '.join(str(s) for s in loops['self_loops'])}"
-            )
-
-        if loops.get('returns'):
-            found_count += 1
-            lines.append(f"### {found_count}. Зацикленность «возврат»")
-            lines.append(
-                "> Повторение операции после выполнения других действий. "
-                "Признак переделок."
-            )
-            lines.append(
-                f"**Найдены**: {', '.join(str(s) for s in loops['returns'])}"
-            )
-
-        if loops.get('ping_pong'):
-            found_count += 1
-            lines.append(f"### {found_count}. Зацикленность «Пинг-понг»")
-            lines.append(
-                "> Повторение пары операций (A-B-A). "
-                "Характерно для доработок или пересылки между отделами."
-            )
-            lines.append(
-                f"**Найдены**: {', '.join(str(s) for s in loops['ping_pong'])}"
-            )
-
-        if loops.get('back_to_start'):
-            found_count += 1
-            lines.append(f"### {found_count}. Зацикленность «В начало»")
-            lines.append(
-                "> Возврат из середины процесса на самый первый этап. "
-                "Признак полной отмены и перезапуска."
-            )
-            lines.append("**Обнаружена**")
-
-        # 7. Long Cycles
-        lc = self.findings.get('long_cycles_76', {})
-        if isinstance(lc, dict) and lc.get('cases'):
-            found_count += 1
-            thr = lc.get('threshold_h')
-            lines.append(f"### {found_count}. Долгий цикл (Long Cycle Time)")
-            lines.append(
-                "> Превышение времени выполнения процесса "
-                "над нормативными или типичными значениями."
-            )
-            lines.append(f"**Обнаружен**: кейсы дольше {thr}ч")
-
-        # 8. Bottlenecks
-        bn = self.findings.get('bottlenecks_77', [])
-        if bn:
-            found_count += 1
-            lines.append(f"### {found_count}. Узкое место (Bottleneck)")
-            lines.append(
-                "> Этапы, вызывающие систематические задержки "
-                "из-за высокой нагрузки или нехватки ресурсов."
-            )
-            lines.append("**Топ задержек по переходам**:")
-            for k, v in bn.items():
-                if isinstance(k, tuple):
-                    lines.append(
-                        f"  - `{k[0]} -> {k[1]}` "
-                        f"(ожидание в среднем: {v['mean']:.2f}ч)"
-                    )
-                else:
-                    lines.append(
-                        f"  - `{k}` (ожидание в среднем: {v['mean']:.2f}ч)"
-                    )
-
-        # 9. Manual Steps
-        ms = self.findings.get('manual_steps_78', [])
-        if ms:
-            found_count += 1
-            lines.append(
-                f"### {found_count}. Нестандартизированный (ручной) этап"
-            )
-            lines.append(
-                "> Этапы с высокой вариативностью длительности, "
-                "зависящие от человеческого фактора."
-            )
-            if isinstance(ms, dict):
-                lines.append(
-                    f"**Найдены**: {', '.join(str(k) for k in ms.keys())}"
-                )
-
-        # 10. One-time Incidents
-        oti = self.findings.get('one_time_incidents_79', [])
-        if oti:
-            found_count += 1
-            lines.append(f"### {found_count}. Разовые инциденты")
-            lines.append(
-                "> Длительные операции, вызванные редким сбоем "
-                "или аварией (не систематические)."
-            )
-            lines.append(
-                f"**Найдены**: "
-                f"{', '.join([str(d['activity']) for d in oti[:10]])}"
-            )
-            if len(oti) > 10:
-                lines.append(f"*(и еще {len(oti) - 10} этапов)*")
-
-        # 11. Repeated Incidents
-        ri = self.findings.get('repeated_incidents_80', [])
-        if ri:
-            found_count += 1
-            lines.append(f"### {found_count}. Многократные инциденты")
-            lines.append(
-                "> Систематические ошибки или программные сбои, "
-                "вызывающие долгие операции."
-            )
-            if isinstance(ri, dict):
-                lines.append(
-                    f"**Найдены**: {', '.join(str(k) for k in ri.keys())}"
-                )
-
-        # 12. Missed Deadlines
-        md = self.findings.get('missed_deadlines_81', [])
-        if md:
-            found_count += 1
-            lines.append(f"### {found_count}. Пропущенные дедлайны")
-            lines.append(
-                "> Нарушение временных ограничений процесса "
-                "(кейсы в топ-5% по длительности)."
-            )
-            lines.append(f"**Найдены**: {', '.join(str(m) for m in md)}")
-
-        # 13. Critical Steps
-        cs = self.findings.get('critical_steps_82', [])
-        if cs:
-            found_count += 1
-            lines.append(f"### {found_count}. Критически важный этап")
-            lines.append(
-                "> Операции, длительность которых наиболее сильно влияет "
-                "на общую длительность всего процесса."
-            )
-            if isinstance(cs, dict):
-                lines.append(
-                    f"**Найдены**: {', '.join(str(k) for k in cs.keys())}"
-                )
-            lines.append(
-                f"*Совет:* Оптимизация именно этих этапов даст "
-                f"максимальный эффект для ускорения процесса."
-            )
-
-        # 14. Redundant Activities
-        ra = self.findings.get('redundant_activities_83', [])
-        if ra:
-            found_count += 1
-            lines.append(
-                f"### {found_count}. Избыточные шаги (Redundant Activities)"
-            )
-            lines.append(
-                "> Действия, не добавляющие ценности "
-                "и не влияющие на конечный результат."
-            )
-            lines.append(f"**Найдены**: {', '.join(str(r) for r in ra)}")
-
-        # 15. Variability
-        hv = self.findings.get('variability_84', {})
-        if isinstance(hv, dict) and hv.get('high'):
-            found_count += 1
-            lines.append(
-                f"### {found_count}. Вариативность (High Variability)"
-            )
-            lines.append(
-                "> Слишком много альтернативных путей выполнения. "
-                "Снижает предсказуемость процесса."
-            )
-            lines.append(
-                f"**Статус**: ⚠️ Высокая вариативность "
-                f"({hv.get('variant_count')} путей, Ratio: {hv.get('ratio')})"
-            )
-
-        # 16. Dark Processes
-        dp = self.findings.get('dark_processes_85', {})
-        if isinstance(dp, dict) and dp.get('dark_variant_count'):
-            found_count += 1
-            lines.append(
-                f"### {found_count}. Скрытые сценарии (Dark Processes)"
-            )
-            lines.append(
-                "> Неформализованные пути выполнения, "
-                "отсутствующие в стандартных регламентах."
-            )
-            lines.append(
-                f"**Обнаружено**: {dp.get('dark_variant_count')} редких путей "
-                f"(покрывают "
-                f"{(1 - dp.get('official_coverage')) * 100:.1f}% трафика)"
-            )
-
-        # 17. Manual Exceptions
-        me = self.findings.get('manual_exceptions_86', [])
-        if me:
-            found_count += 1
-            lines.append(
-                f"### {found_count}. Ручные исключения (Manual Exceptions)"
-            )
-            lines.append(
-                "> Долгие операции с низкой вариативностью, "
-                "требующие ручного подтверждения."
-            )
-            lines.append(f"**Найдены**: {', '.join(str(m) for m in me)}")
-
-        # 18. Rework Loops
-        rw = self.findings.get('rework_loops_87', [])
-        if rw:
-            found_count += 1
-            lines.append(
-                f"### {found_count}. Обратные потоки (Rework Loops)"
-            )
-            lines.append(
-                "> Непредусмотренные возвраты на предыдущие этапы "
-                "из-за ошибок или доработок."
-            )
-            lines.append("**Топ переходов-возвратов**:")
-            for k, v in rw.items():
-                if isinstance(k, tuple):
-                    lines.append(
-                        f"  - `{k[0]} -> {k[1]}` (повторено {v} раз)"
-                    )
-                else:
-                    lines.append(f"  - `{k}` (повторено {v} раз)")
-
-        if found_count == 0:
+        
+        if not hasattr(self, 'findings_df') or self.findings_df.empty:
             lines.append("\n✅ Отклонений не обнаружено.")
-        else:
-            lines.insert(1, f"\n**Обнаружено отклонений: {found_count}**\n")
+            return "\n".join(lines)
+            
+        found_count = len(self.findings_df['deviation_category'].unique())
+        lines.insert(1, f"\n**Обнаружено категорий отклонений: {found_count}**\n")
+        
+        cat_idx = 1
+        for category, group in self.findings_df.groupby('deviation_category', sort=False):
+            lines.append(f"### {cat_idx}. {category}")
+            desc = group['description'].iloc[0]
+            lines.append(f"> {desc}")
+            
+            items_list = []
+            for _, row in group.iterrows():
+                obj_id = row['object_id']
+                metric = row['metric']
+                if pd.notna(metric) and metric:
+                    items_list.append(f"`{obj_id}` ({metric})")
+                else:
+                    items_list.append(f"`{obj_id}`")
+            
+            if len(items_list) > 10:
+                joined = ", ".join(items_list[:10])
+                lines.append(f"**Найдены**: {joined}\n*(и еще {len(items_list) - 10} шт.)*")
+            else:
+                joined = ", ".join(items_list)
+                lines.append(f"**Найдены**: {joined}")
+                
+            cat_idx += 1
 
         return "\n".join(lines)
-
-    def get_deviations_df(self) -> pd.DataFrame:
-        """
-        Возвращает найденные базовые неэффективности в виде структурированного pandas DataFrame.
-        Каждая строка датасета — это отдельное найденное отклонение.
-        """
-        rows = []
-
-        # 1. Outliers
-        for outlier in self.findings.get('outliers_70', []):
-            rows.append({
-                'deviation_category': 'Аномалии (Outliers)',
-                'deviation_name': 'Выброс длительности',
-                'object_id': str(outlier),
-                'metric': None,
-                'description': 'Существенное отклонение по длительности выполнения от нормы'
-            })
-
-        # 2-6. Loops
-        loops = self.findings.get('loops_71_75', {})
-        for act in loops.get('self_loops', []):
-            rows.append({
-                'deviation_category': 'Зацикленность (Self-loop)',
-                'deviation_name': 'Повторение этапа',
-                'object_id': str(act),
-                'metric': None,
-                'description': 'Немедленное повторение той же операции подряд'
-            })
-        for act in loops.get('returns', []):
-            rows.append({
-                'deviation_category': 'Зацикленность (Возврат)',
-                'deviation_name': 'Возврат на этап',
-                'object_id': str(act),
-                'metric': None,
-                'description': 'Повторение операции после выполнения других действий'
-            })
-        for act in loops.get('ping_pong', []):
-            rows.append({
-                'deviation_category': 'Зацикленность (Пинг-понг)',
-                'deviation_name': 'Цикл A-B-A',
-                'object_id': str(act),
-                'metric': None,
-                'description': 'Зацикливание между двумя операциями (A -> B -> A)'
-            })
-
-        # 7. Long Cycles
-        lc = self.findings.get('long_cycles_76', {})
-        if isinstance(lc, dict) and lc.get('cases'):
-            thr = lc.get('threshold_h')
-            for case in lc.get('cases', []):
-                rows.append({
-                    'deviation_category': 'Долгий цикл (Long Cycle Time)',
-                    'deviation_name': 'Превышение норматива',
-                    'object_id': str(case),
-                    'metric': f"Свыше {thr}ч",
-                    'description': 'Кейс выполняется дольше 95-го процентиля'
-                })
-
-        # 8. Bottlenecks
-        bn = self.findings.get('bottlenecks_77', [])
-        if isinstance(bn, dict):
-            for k, v in bn.items():
-                name = f"{k[0]} -> {k[1]}" if isinstance(k, tuple) else str(k)
-                mean_val = v.get('mean', 0) if isinstance(v, dict) else 0
-                rows.append({
-                    'deviation_category': 'Узкое место (Bottleneck)',
-                    'deviation_name': 'Задержка на переходе',
-                    'object_id': name,
-                    'metric': f"Среднее ожидание: {mean_val:.2f}ч",
-                    'description': 'Систематические задержки'
-                })
-
-        # 9. Manual Steps
-        ms = self.findings.get('manual_steps_78', [])
-        if isinstance(ms, dict):
-            for k, v in ms.items():
-                cv_val = v.get('cv', 0) if isinstance(v, dict) else 0
-                rows.append({
-                    'deviation_category': 'Нестандартизированный этап',
-                    'deviation_name': 'Ручной или изменчивый шаг',
-                    'object_id': str(k),
-                    'metric': f"CV = {cv_val:.2f}",
-                    'description': 'Высокая вариативность длительности выполнения'
-                })
-
-        # 10. One-time Incidents
-        oti = self.findings.get('one_time_incidents_79', [])
-        for item in oti:
-            rows.append({
-                'deviation_category': 'Разовые инциденты',
-                'deviation_name': 'Единичный аномальный сбой',
-                'object_id': str(item.get('activity')),
-                'metric': f"Случаев: {item.get('outliers')}",
-                'description': 'Редкий сбой или авария'
-            })
-
-        # 11. Repeated Incidents
-        ri = self.findings.get('repeated_incidents_80', [])
-        if isinstance(ri, dict):
-            for k, v in ri.items():
-                diff_pct = v.get('diff_pct', 0) if isinstance(v, dict) else 0
-                rows.append({
-                    'deviation_category': 'Многократные инциденты',
-                    'deviation_name': 'Регулярные сбои',
-                    'object_id': str(k),
-                    'metric': f"Отклонение {diff_pct:.1%}",
-                    'description': 'Систематические ошибки в выполнении'
-                })
-
-        # 12. Missed Deadlines
-        md = self.findings.get('missed_deadlines_81', [])
-        for case in md:
-            rows.append({
-                'deviation_category': 'Пропущенные дедлайны',
-                'deviation_name': 'Нарушение SLA',
-                'object_id': str(case),
-                'metric': None,
-                'description': 'Длительность кейса превышает допустимые нормы'
-            })
-
-        # 13. Critical Steps
-        cs = self.findings.get('critical_steps_82', [])
-        if isinstance(cs, dict):
-            for k, v in cs.items():
-                rows.append({
-                    'deviation_category': 'Критически важный этап',
-                    'deviation_name': 'Ключевой шаг',
-                    'object_id': str(k),
-                    'metric': f"Корреляция = {v}",
-                    'description': 'Сильное влияние на длительность всего процесса'
-                })
-
-        # 14. Redundant Activities
-        ra = self.findings.get('redundant_activities_83', [])
-        for act in ra:
-            rows.append({
-                'deviation_category': 'Избыточные шаги',
-                'deviation_name': 'Шаг без ценности',
-                'object_id': str(act),
-                'metric': None,
-                'description': 'Шаги, не влияющие на конечный результат или время'
-            })
-
-        # 15. Variability
-        hv = self.findings.get('variability_84', {})
-        if isinstance(hv, dict) and hv.get('high'):
-            rows.append({
-                'deviation_category': 'Высокая вариативность',
-                'deviation_name': 'Непредсказуемость процесса',
-                'object_id': 'Весь процесс',
-                'metric': f"Ratio: {hv.get('ratio')}",
-                'description': 'Множество уникальных путей (вариантов)'
-            })
-
-        # 16. Dark Processes
-        dp = self.findings.get('dark_processes_85', {})
-        if isinstance(dp, dict) and dp.get('dark_variant_count'):
-            rows.append({
-                'deviation_category': 'Скрытые сценарии (Dark Processes)',
-                'deviation_name': 'Нетипичные или теневые пути',
-                'object_id': 'Весь процесс',
-                'metric': f"Обнаружено {dp.get('dark_variant_count')} редких путей",
-                'description': 'Неформализованные пути выполнения, не охваченные топом 80%'
-            })
-
-        # 17. Manual Exceptions
-        me = self.findings.get('manual_exceptions_86', [])
-        for act in me:
-            rows.append({
-                'deviation_category': 'Ручные исключения (Manual Exceptions)',
-                'deviation_name': 'Долгая операция',
-                'object_id': str(act),
-                'metric': None,
-                'description': 'Операции с низкой вариативностью, но в 2х раз дольше среднего'
-            })
-
-        # 18. Rework Loops
-        rw = self.findings.get('rework_loops_87', [])
-        if isinstance(rw, dict):
-            for k, v in rw.items():
-                name = f"{k[0]} -> {k[1]}" if isinstance(k, tuple) else str(k)
-                rows.append({
-                    'deviation_category': 'Обратные потоки (Rework Loops)',
-                    'deviation_name': 'Возврат из-за ошибок',
-                    'object_id': name,
-                    'metric': f"Кол-во: {v}",
-                    'description': 'Возвраты на предыдущие этапы логики процесса'
-                })
-
-        df = pd.DataFrame(rows)
-        # Если датафрейм пустой
-        if df.empty:
-            return pd.DataFrame(columns=[
-                'deviation_category', 'deviation_name', 'object_id', 'metric', 'description'
-            ])
-            
-        return df
