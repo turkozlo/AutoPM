@@ -28,13 +28,15 @@ class DeviationDetectorAgent:
 
         df = df.copy()
 
-        # 1. ПРИНУДИТЕЛЬНЫЙ ПАРСИНГ ЧЕРЕЗ СТРОКУ (String-First)
-        # Это единственный способ убить баг 'Timestamp is not convertible to datetime' 
-        # в средах cudf/RAPIDS и новых проксированных версиях Pandas.
-        # Сначала превращаем всё в строки, а потом парсим заново в чистый naive datetime64[ns].
-        df[self.timestamp_col] = pd.to_datetime(
-            df[self.timestamp_col].astype(str), utc=True, errors='coerce'
-        ).dt.tz_localize(None).astype('datetime64[ns]')
+        # 1. ПРИНУДИТЕЛЬНЫЙ ПАРСИНГ ПРАВИЛЬНОГО ТИПА (Invariant: datetime64[ns])
+        # Отказ от String-First для скорости и стабильности.
+        ts = pd.to_datetime(df[self.timestamp_col], errors='coerce', utc=True)
+        ts = ts.dt.tz_localize(None)
+        df[self.timestamp_col] = ts.values.astype('datetime64[ns]')
+
+        # Жесткий инвариант для Linux/Pandas 2.2+
+        if df[self.timestamp_col].dtype != 'datetime64[ns]':
+            raise TypeError(f"Failed to normalize {self.timestamp_col} to datetime64[ns]. Got: {df[self.timestamp_col].dtype}")
 
         # Удаление пустых дат
         nat_count = int(df[self.timestamp_col].isna().sum())
@@ -128,19 +130,16 @@ class DeviationDetectorAgent:
         ts_col = 'time:timestamp'
         act_col = 'concept:name'
 
-        # Не мутируем оригинальный df — делаем копию
-        df = df.copy()
-
-        # Сортировка перед shift: naive datetime64[ns] сортируется напрямую (без astype int64)
+        # Сортировка перед shift: naive datetime64[ns] сортируется напрямую
         df = df.sort_values([case_col, ts_col]).reset_index(drop=True)
 
         # Shift для вычисления времени следующего события
         next_ts_raw = df.groupby(case_col)[ts_col].shift(-1)
 
-        # Тот же String-First подход для вычислений:
-        # Сначала в строку (.astype(str)), потом в дату, потом в наносекунды.
-        CUR_INT = pd.to_datetime(df[ts_col].astype(str), errors='coerce').values.astype('int64')
-        NXT_INT = pd.to_datetime(next_ts_raw.astype(str), errors='coerce').values.astype('int64')
+        # Максимально быстрая арифметика через .view('int64') 
+        # (не требует повторного парсинга или кастования)
+        CUR_INT = df[ts_col].values.view('int64')
+        NXT_INT = next_ts_raw.values.view('int64')
         iNaT = np.iinfo(np.int64).min
         valid = (CUR_INT != iNaT) & (NXT_INT != iNaT)
         duration_ns = np.where(valid, NXT_INT - CUR_INT, np.nan)
@@ -157,9 +156,9 @@ class DeviationDetectorAgent:
         case_col = 'case:concept:name'
         ts_col = 'time:timestamp'
         case_dur = df_dur.groupby(case_col)[ts_col].agg(['min', 'max'])
-        # Тот же String-First подход
-        min_int = pd.to_datetime(case_dur['min'].astype(str), errors='coerce').values.astype('int64')
-        max_int = pd.to_datetime(case_dur['max'].astype(str), errors='coerce').values.astype('int64')
+        # Тот же высокопроизводительный подход через .view('int64')
+        min_int = case_dur['min'].values.view('int64')
+        max_int = case_dur['max'].values.view('int64')
         case_dur['duration_h'] = (max_int - min_int) / 3.6e12
         return case_dur
 

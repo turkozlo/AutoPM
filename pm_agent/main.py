@@ -242,6 +242,7 @@ def main():
     args = parser.parse_args()
 
     print("AutoPM Agent")
+    print(f"DEBUG: pandas dtype_backend = {pd.get_option('mode.dtype_backend')}")
 
     # 1. Get file path (FIRST!)
     file_path = args.file

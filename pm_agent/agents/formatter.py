@@ -68,14 +68,15 @@ class DataFormatterAgent:
         for col in df_new.columns:
             target_type = type_map.get(col)
             
-            # АГРЕССИВНАЯ ПРОВЕРКА НА ДАТЫ
             if target_type == 'datetime' or self._is_datetime_like(df_new[col]):
                 try:
-                    # УЛЬТИМАТИВНЫЙ ФИКС: Сначала в строку, потом в дату.
-                    # Это убивает баг 'Timestamp is not convertible to datetime' в cuDF.
-                    df_new[col] = pd.to_datetime(
-                        df_new[col].astype(str), utc=True, errors='coerce'
-                    ).dt.tz_localize(None).astype('datetime64[ns]')
+                    # ПРАВИЛЬНЫЙ ПАРСИНГ: (Отказ от String-First)
+                    # 1. Парсим в UTC
+                    # 2. Убираем таймзону
+                    # 3. Принудительно ставим тип datetime64[ns]
+                    ts = pd.to_datetime(df_new[col], utc=True, errors='coerce')
+                    df_new[col] = ts.dt.tz_localize(None).astype('datetime64[ns]')
+                    
                     print(f"Column '{col}' FORCED to datetime64[ns]")
                     continue
                 except Exception as e:
