@@ -66,8 +66,9 @@ class DataFormatterAgent:
         for fmt in formats:
             try:
                 # Работаем через pd.to_datetime на списке (это безопасно в cudf.pandas)
-                ts = pd.to_datetime(s_list, format=fmt, errors='coerce', utc=True)
-                nat_count = pd.Series(ts).isna().sum()
+                ts = pd.to_datetime(s_list, format=fmt, errors='coerce')
+                # Прямая проверка на NaT в списке/массиве
+                nat_count = pd.isna(ts).sum()
                 if nat_count < min_nat:
                     min_nat = nat_count
                     best_ts = ts
@@ -76,10 +77,11 @@ class DataFormatterAgent:
                 continue
         
         if best_ts is None:
-            best_ts = pd.to_datetime(s_list, errors='coerce', utc=True)
+            best_ts = pd.to_datetime(s_list, errors='coerce')
             
-        # Возвращаем как Series с CPU-типом datetime64[ns]
-        return pd.Series(best_ts).dt.tz_localize(None).astype('datetime64[ns]')
+        # Возвращаем как Series с CPU-типом datetime64[ns] (naive)
+        # Это в точности соответствует тому, что делал старый DataProcessor
+        return pd.Series(best_ts).astype('datetime64[ns]')
 
     def run(self) -> pd.DataFrame:
         """

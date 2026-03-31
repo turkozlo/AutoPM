@@ -17,13 +17,11 @@ class DeviationDetectorAgent:
         self.quality_report = {}
 
     def preprocess_event_log(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-        # КРИТИЧЕСКИЙ ШАГ: Принудительный перевод в ЧИСТЫЙ Pandas (CPU).
-        # Это убивает любые связи с cudf.pandas proxy, которые ломают pm4py на Linux.
+        # 0. ИЗОЛЯЦИЯ: Гарантируем чистый Pandas (CPU) для стабильности на Linux
         if hasattr(df, 'to_pandas'):
             df = df.to_pandas()
         else:
-            # Трюк для обхода системного перехвата cudf.pandas:
-            # Превращаем в словарь и обратно в новый DataFrame.
+            # Если активен cudf.pandas, разрываем связь через dict
             df = pd.DataFrame(df.to_dict('list'))
 
         self.quality_report = {
@@ -32,16 +30,22 @@ class DeviationDetectorAgent:
             'warnings': []
         }
 
-        # 1. ОБЕСПЕЧИВАЕМ ТИП DATETIME И ФОРМАТИРОВАНИЕ PM4PY
+        # 1. ПОДГОТОВКА ТИПОВ (КАК В СТАРОЙ ВЕРСИИ - MAIN)
         try:
-            # Используем apply(pd.to_datetime) для обхода ограничений cudf на Series
+            # 1.1 Force convert to datetime
             if not pd.api.types.is_datetime64_any_dtype(df[self.timestamp_col]):
-                df[self.timestamp_col] = pd.to_datetime(df[self.timestamp_col].astype(str), errors='coerce', utc=True)
+                df[self.timestamp_col] = pd.to_datetime(df[self.timestamp_col].astype(str), errors='coerce')
             
-            # Удаление пустых дат ДО форматирования
+            # 1.2 Drop NaT
             df = df.dropna(subset=[self.timestamp_col])
 
-            # ИСПОЛЬЗУЕМ СТАНДАРТНОЕ ФОРМАТИРОВАНИЕ PM4PY
+            # 1.3 CRITICAL: Convert to pydatetime BEFORE format_dataframe (Секрет старой версии)
+            df[self.timestamp_col] = [
+                t.to_pydatetime() if hasattr(t, 'to_pydatetime') else t 
+                for t in df[self.timestamp_col]
+            ]
+
+            # 1.4 ИСПОЛЬЗУЕМ ФОРМАТИРОВАНИЕ PM4PY НА УЖЕ ОЧИЩЕННЫХ ТИПАХ
             df = pm4py.format_dataframe(
                 df, 
                 case_id=self.case_col, 
@@ -49,22 +53,14 @@ class DeviationDetectorAgent:
                 timestamp_key=self.timestamp_col
             )
         except Exception as e:
-            # Ручной фолбэк, если всё равно что-то пошло не так
             self.quality_report['warnings'].append(f'Formatting warning: {e}')
             df = df.rename(columns={
                 self.case_col: 'case:concept:name',
                 self.activity_col: 'concept:name',
                 self.timestamp_col: 'time:timestamp'
             })
-            df['time:timestamp'] = pd.to_datetime(df['time:timestamp'], errors='coerce', utc=True)
+            df['time:timestamp'] = pd.to_datetime(df['time:timestamp'], errors='coerce')
             df = df.dropna(subset=['time:timestamp'])
-
-        # 2. КРИТИЧЕСКИЙ ШАГ ИЗ СТАРОЙ ВЕРСИИ: Конвертация в pydatetime
-        # Это гарантирует, что pm4py работает с нативными объектами Python, а не с типами NumPy/cudf
-        df['time:timestamp'] = [
-            t.to_pydatetime() if hasattr(t, 'to_pydatetime') else t 
-            for t in df['time:timestamp']
-        ]
 
         # 3. Безопасная сортировка и финализация (уже в режиме Pure Pandas)
         df = df.sort_values(['case:concept:name', 'time:timestamp']).reset_index(drop=True)
