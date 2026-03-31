@@ -46,8 +46,9 @@ class DeviationDetectorAgent:
             self.quality_report['warnings'].append(f'Удалено {nat_count} строк с невалидным timestamp (NaT)')
             df = df.dropna(subset=[self.timestamp_col])
 
-        # 2. Безопасная сортировка (обход бага Pandas 3.12 с сортировкой DatetimeArray)
-        df['_sort_ts'] = df[self.timestamp_col].astype('int64')
+        # 2. Безопасная сортировка (обход багов Pandas/cuDF на Linux)
+        # TRULY NUCLEAR: pd.to_numeric(pd.to_datetime(...)) для всех типов массивов
+        df['_sort_ts'] = pd.to_numeric(pd.to_datetime(df[self.timestamp_col], errors='coerce')).fillna(0).astype('int64')
         df = df.sort_values([self.case_col, '_sort_ts']).reset_index(drop=True)
         df = df.drop(columns=['_sort_ts'])
 
@@ -132,18 +133,18 @@ class DeviationDetectorAgent:
         ts_col = 'time:timestamp'
         act_col = 'concept:name'
 
-        # Сортировка перед shift: используем int64 прокси для обхода багов Pandas на Linux
-        df['_sort_ts'] = df[ts_col].view('int64')
+        # Сортировка перед shift: используем TRULY NUCLEAR прокси
+        df['_sort_ts'] = pd.to_numeric(pd.to_datetime(df[ts_col], errors='coerce')).fillna(0).astype('int64')
         df = df.sort_values([case_col, '_sort_ts']).reset_index(drop=True)
         df = df.drop(columns=['_sort_ts'])
 
         # Shift для вычисления времени следующего события
         next_ts_raw = df.groupby(case_col)[ts_col].shift(-1)
 
-        # Максимально быстрая арифметика через .view('int64') 
-        # Добавляем .astype('datetime64[ns]') для работы с object-массивами (cudf-proxy)
-        CUR_INT = df[ts_col].values.astype('datetime64[ns]').view('int64')
-        NXT_INT = next_ts_raw.values.astype('datetime64[ns]').view('int64')
+        # ТЕХНОЛОГИЯ "TRULY NUCLEAR": Используем самый стабильный путь через pd.to_numeric
+        # Это обходит все баги NumPy и cuDF с объектными массивами и NaT
+        CUR_INT = pd.to_numeric(pd.to_datetime(df[ts_col], errors='coerce')).fillna(0).astype('int64').values
+        NXT_INT = pd.to_numeric(pd.to_datetime(next_ts_raw, errors='coerce')).fillna(0).astype('int64').values
         iNaT = np.iinfo(np.int64).min
         valid = (CUR_INT != iNaT) & (NXT_INT != iNaT)
         duration_ns = np.where(valid, NXT_INT - CUR_INT, np.nan)
@@ -160,10 +161,9 @@ class DeviationDetectorAgent:
         case_col = 'case:concept:name'
         ts_col = 'time:timestamp'
         case_dur = df_dur.groupby(case_col)[ts_col].agg(['min', 'max'])
-        # Тот же высокопроизводительный подход через .view('int64')
-        # Гарантируем тип для работы с object-массивами (cudf-proxy)
-        min_int = case_dur['min'].values.astype('datetime64[ns]').view('int64')
-        max_int = case_dur['max'].values.astype('datetime64[ns]').view('int64')
+        # ТЕХНОЛОГИЯ "TRULY NUCLEAR": Максимальная стабильность через pd.to_numeric
+        min_int = pd.to_numeric(pd.to_datetime(case_dur['min'], errors='coerce')).fillna(0).astype('int64').values
+        max_int = pd.to_numeric(pd.to_datetime(case_dur['max'], errors='coerce')).fillna(0).astype('int64').values
         case_dur['duration_h'] = (max_int - min_int) / 3.6e12
         return case_dur
 

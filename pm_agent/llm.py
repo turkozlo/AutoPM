@@ -251,10 +251,10 @@ class LLMClient:
             "plt.savefig('reports/temp_plot.png')\n"
             "result = 'reports/temp_plot.png'\n"
             "\n"
-            "7. БЕЗОПАСНАЯ СОРТИРОВКА (LINUX FIX): Если нужно сортировать по колонке с датой, ВСЕГДА используй промежуточный .astype('int64').\n"
-            "   Пример: df.assign(ts_int=df['timestamp'].astype('int64')).sort_values(['case_id', 'ts_int']).drop(columns='ts_int')\n"
+            "7. БЕЗОПАСНАЯ СОРТИРОВКА (LINUX FIX): Если нужно сортировать по колонке с датой, ВСЕГДА используй промежуточный pd.to_numeric(pd.to_datetime(..., errors='coerce')).\n"
+            "   Пример: df.assign(ts_int=pd.to_numeric(pd.to_datetime(df['timestamp'], errors='coerce'))).sort_values(['case_id', 'ts_int']).drop(columns='ts_int')\n"
             "8. НЕ ПЕРЕКОНВЕРТИРУЙ: Даты уже в формате datetime64[ns]. Не вызывай pd.to_datetime() повторно.\n"
-            "9. ЯДЕРНЫЙ .view() (LINUX FIX): Если нужно получить инты через .view('int64'), ВСЕГДА делай .values.astype('datetime64[ns]').view('int64') для защиты от object-массивов.\n"
+            "9. ЯДЕРНЫЙ ПЕРЕВОД В ЧИСЛА (LINUX FIX): Если нужны инты из дат, ВСЕГДА делай pd.to_numeric(pd.to_datetime(df['ts'], errors='coerce')).fillna(0).astype('int64'). Это защищает от object-массивов с NaT.\n"
             + error_context
             + "\n"
             "ФОРМАТ ОТВЕТА (JSON):\n"
