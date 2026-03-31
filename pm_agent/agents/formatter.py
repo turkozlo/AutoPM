@@ -38,6 +38,48 @@ class DataFormatterAgent:
             
         return False
 
+        return False
+
+    def _robust_to_datetime(self, series: pd.Series) -> pd.Series:
+        """
+        Tries multiple explicit formats to find the best match for the dataset.
+        Avoids general pd.to_datetime() inference which can cause crashes.
+        """
+        formats = [
+            'ISO8601', 
+            '%Y-%m-%d %H:%M:%S', 
+            '%Y-%m-%d', 
+            '%d.%m.%Y %H:%M:%S', 
+            '%d.%m.%Y', 
+            '%Y/%m/%d %H:%M:%S', 
+            '%Y/%m/%d'
+        ]
+        
+        best_ts = None
+        min_nat = len(series) + 1
+        
+        # Если это уже datetime, просто нормализуем
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return pd.to_datetime(series, utc=True, errors='coerce').dt.tz_localize(None).astype('datetime64[ns]')
+
+        s_str = series.astype(str)
+        for fmt in formats:
+            try:
+                ts = pd.to_datetime(s_str, format=fmt, errors='coerce', utc=True)
+                nat_count = ts.isna().sum()
+                if nat_count < min_nat:
+                    min_nat = nat_count
+                    best_ts = ts
+                    if nat_count == 0: break
+            except Exception:
+                continue
+        
+        if best_ts is None:
+            # Если ничего не подошло, возвращаем пустую серию того же типа
+            return pd.Series(pd.NaT, index=series.index).astype('datetime64[ns]')
+            
+        return best_ts.dt.tz_localize(None).astype('datetime64[ns]')
+
     def run(self) -> pd.DataFrame:
         """
         Analyzes column types and converts them (int, float, datetime).
@@ -70,14 +112,9 @@ class DataFormatterAgent:
             
             if target_type == 'datetime' or self._is_datetime_like(df_new[col]):
                 try:
-                    # ПРАВИЛЬНЫЙ ПАРСИНГ: (Отказ от String-First)
-                    # 1. Парсим в UTC (Явно указываем ISO8601 для стабильности)
-                    # 2. Убираем таймзону
-                    # 3. Принудительно ставим тип datetime64[ns]
-                    ts = pd.to_datetime(df_new[col], format='ISO8601', utc=True, errors='coerce')
-                    df_new[col] = ts.dt.tz_localize(None).astype('datetime64[ns]')
-                    
-                    print(f"Column '{col}' FORCED to datetime64[ns]")
+                    # ПРАВИЛЬНЫЙ ПАРСИНГ: (Многоформатный перебор)
+                    df_new[col] = self._robust_to_datetime(df_new[col])
+                    print(f"Column '{col}' FORCED to datetime64[ns] (Robust Parser)")
                     continue
                 except Exception as e:
                     print(f"Error forced-converting '{col}' to datetime: {e}")

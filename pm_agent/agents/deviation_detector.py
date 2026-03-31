@@ -16,6 +16,32 @@ class DeviationDetectorAgent:
         self.timestamp_col = timestamp_col
         self.quality_report = {}
 
+    def _robust_to_datetime(self, series: pd.Series) -> pd.Series:
+        """Sequential parser trying explicit formats to avoid inference crashes."""
+        formats = ['ISO8601', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%d.%m.%Y %H:%M:%S', '%d.%m.%Y']
+        best_ts = None
+        min_nat = len(series) + 1
+        
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return pd.to_datetime(series, utc=True, errors='coerce').dt.tz_localize(None).astype('datetime64[ns]')
+
+        s_str = series.astype(str)
+        for fmt in formats:
+            try:
+                ts = pd.to_datetime(s_str, format=fmt, errors='coerce', utc=True)
+                nat_count = ts.isna().sum()
+                if nat_count < min_nat:
+                    min_nat = nat_count
+                    best_ts = ts
+                    if nat_count == 0: break
+            except Exception:
+                continue
+        
+        if best_ts is None:
+            return pd.Series(pd.NaT, index=series.index).astype('datetime64[ns]')
+            
+        return best_ts.dt.tz_localize(None).astype('datetime64[ns]')
+
     def preprocess_event_log(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         if hasattr(df, 'to_pandas'):
             df = df.to_pandas()
@@ -29,11 +55,8 @@ class DeviationDetectorAgent:
         df = df.copy()
 
         # 1. ПРИНУДИТЕЛЬНЫЙ ПАРСИНГ ПРАВИЛЬНОГО ТИПА (Invariant: datetime64[ns])
-        # Отказ от String-First для скорости и стабильности.
-        # Используем явный формат ISO8601, как подтверждено тестами пользователя.
-        ts = pd.to_datetime(df[self.timestamp_col], format='ISO8601', errors='coerce', utc=True)
-        ts = ts.dt.tz_localize(None)
-        df[self.timestamp_col] = ts.values.astype('datetime64[ns]')
+        # Используем многоформатный робастный парсер для гибкости (ISO, даты без времени и т.д.)
+        df[self.timestamp_col] = self._robust_to_datetime(df[self.timestamp_col])
 
         # Жесткий инвариант для Linux/Pandas 2.2+
         if df[self.timestamp_col].dtype != 'datetime64[ns]':
