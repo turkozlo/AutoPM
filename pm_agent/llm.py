@@ -250,6 +250,10 @@ class LLMClient:
             "plt.title('Распределение длительности кейсов (часы)')\n"
             "plt.savefig('reports/temp_plot.png')\n"
             "result = 'reports/temp_plot.png'\n"
+            "\n"
+            "7. БЕЗОПАСНАЯ СОРТИРОВКА (LINUX FIX): Если нужно сортировать по колонке с датой, ВСЕГДА используй промежуточный .astype('int64').\n"
+            "   Пример: df.assign(ts_int=df['timestamp'].astype('int64')).sort_values(['case_id', 'ts_int']).drop(columns='ts_int')\n"
+            "8. НЕ ПЕРЕКОНВЕРТИРУЙ: Даты уже в формате datetime64[ns]. Не вызывай pd.to_datetime() повторно.\n"
             + error_context
             + "\n"
             "ФОРМАТ ОТВЕТА (JSON):\n"

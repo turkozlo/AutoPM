@@ -132,8 +132,10 @@ class DeviationDetectorAgent:
         ts_col = 'time:timestamp'
         act_col = 'concept:name'
 
-        # Сортировка перед shift: naive datetime64[ns] сортируется напрямую
-        df = df.sort_values([case_col, ts_col]).reset_index(drop=True)
+        # Сортировка перед shift: используем int64 прокси для обхода багов Pandas на Linux
+        df['_sort_ts'] = df[ts_col].view('int64')
+        df = df.sort_values([case_col, '_sort_ts']).reset_index(drop=True)
+        df = df.drop(columns=['_sort_ts'])
 
         # Shift для вычисления времени следующего события
         next_ts_raw = df.groupby(case_col)[ts_col].shift(-1)

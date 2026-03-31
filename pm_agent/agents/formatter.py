@@ -53,7 +53,11 @@ class DataFormatterAgent:
             'ISO8601', 
             '%Y-%m-%d %H:%M:%S', 
             '%Y-%m-%d', 
+            '%d.%m.%Y %H:%M:%S', 
             '%d.%m.%Y', 
+            '%m/%d/%Y %H:%M:%S', 
+            '%m/%d/%Y', 
+            '%Y/%m/%d %H:%M:%S', 
             '%Y/%m/%d'
         ]
         
