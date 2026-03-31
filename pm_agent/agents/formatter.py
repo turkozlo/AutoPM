@@ -42,31 +42,27 @@ class DataFormatterAgent:
 
     def _robust_to_datetime(self, series: pd.Series) -> pd.Series:
         """
-        Tries multiple explicit formats to find the best match for the dataset.
-        Avoids general pd.to_datetime() inference which can cause crashes in cuDF.
+        Exclusive point for datetime conversion. 
+        Uses "String-First" approach to guarantee stability in cuDF/RAPIDS.
         """
-        # ЕСЛИ УЖЕ DATETIME-ТИП — НЕ ВЫЗЫВАЕМ pd.to_datetime ЗАНОВО! Это ломает cudf
-        if pd.api.types.is_datetime64_any_dtype(series):
-            if hasattr(series, 'dt') and series.dt.tz is not None:
-                return series.dt.tz_convert('UTC').dt.tz_localize(None).astype('datetime64[ns]')
-            return series.astype('datetime64[ns]')
-
+        # Превращаем всё в строки — это УБИВАЕТ внутренние объекты Timestamp,
+        # которые вызывают TypeError в cudf.pandas при повторном парсинге.
+        s_str = series.astype(str)
+        
         formats = [
             'ISO8601', 
             '%Y-%m-%d %H:%M:%S', 
             '%Y-%m-%d', 
-            '%d.%m.%Y %H:%M:%S', 
             '%d.%m.%Y', 
-            '%Y/%m/%d %H:%M:%S', 
             '%Y/%m/%d'
         ]
         
         best_ts = None
         min_nat = len(series) + 1
         
-        s_str = series.astype(str)
         for fmt in formats:
             try:
+                # Парсим из ЧИСТЫХ СТРОК
                 ts = pd.to_datetime(s_str, format=fmt, errors='coerce', utc=True)
                 nat_count = ts.isna().sum()
                 if nat_count < min_nat:
@@ -77,8 +73,8 @@ class DataFormatterAgent:
                 continue
         
         if best_ts is None:
-            # Если ничего не подошло, возвращаем пустую серию того же типа
-            return pd.Series(pd.NaT, index=series.index).astype('datetime64[ns]')
+            # Если ничего не подошло, пробуем общий парсинг (но тоже из строк!)
+            best_ts = pd.to_datetime(s_str, errors='coerce', utc=True)
             
         return best_ts.dt.tz_localize(None).astype('datetime64[ns]')
 

@@ -16,36 +16,6 @@ class DeviationDetectorAgent:
         self.timestamp_col = timestamp_col
         self.quality_report = {}
 
-    def _robust_to_datetime(self, series: pd.Series) -> pd.Series:
-        """Sequential parser trying explicit formats to avoid inference crashes."""
-        # ЕСЛИ УЖЕ DATETIME-ТИП — НЕ ВЫЗЫВАЕМ pd.to_datetime ЗАНОВО!
-        # Это ломает cudf.pandas прокси (TypeError: Timestamp to Timestamp)
-        if pd.api.types.is_datetime64_any_dtype(series):
-            if hasattr(series, 'dt') and series.dt.tz is not None:
-                return series.dt.tz_convert('UTC').dt.tz_localize(None).astype('datetime64[ns]')
-            return series.astype('datetime64[ns]')
-
-        formats = ['ISO8601', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%d.%m.%Y %H:%M:%S', '%d.%m.%Y']
-        best_ts = None
-        min_nat = len(series) + 1
-        
-        s_str = series.astype(str)
-        for fmt in formats:
-            try:
-                ts = pd.to_datetime(s_str, format=fmt, errors='coerce', utc=True)
-                nat_count = ts.isna().sum()
-                if nat_count < min_nat:
-                    min_nat = nat_count
-                    best_ts = ts
-                    if nat_count == 0: break
-            except Exception:
-                continue
-        
-        if best_ts is None:
-            return pd.Series(pd.NaT, index=series.index).astype('datetime64[ns]')
-            
-        return best_ts.dt.tz_localize(None).astype('datetime64[ns]')
-
     def preprocess_event_log(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         if hasattr(df, 'to_pandas'):
             df = df.to_pandas()
@@ -58,13 +28,17 @@ class DeviationDetectorAgent:
 
         df = df.copy()
 
-        # 1. ПРИНУДИТЕЛЬНЫЙ ПАРСИНГ ПРАВИЛЬНОГО ТИПА (Invariant: datetime64[ns])
-        # Используем многоформатный робастный парсер для гибкости (ISO, даты без времени и т.д.)
-        df[self.timestamp_col] = self._robust_to_datetime(df[self.timestamp_col])
+        # 1. ОБЕСПЕЧИВАЕМ ТИП DATETIME (ОДИН РАЗ)
+        # Если колонка еще не datetime (например, только что прочитали из XES),
+        # переводим её максимально безопасным способом (через строку).
+        if not pd.api.types.is_datetime64_any_dtype(df[self.timestamp_col]):
+            df[self.timestamp_col] = pd.to_datetime(
+                df[self.timestamp_col].astype(str), errors='coerce', utc=True
+            ).dt.tz_localize(None).astype('datetime64[ns]')
 
-        # Жесткий инвариант для Linux/Pandas 2.2+
+        # Жесткий инвариант для анализа
         if df[self.timestamp_col].dtype != 'datetime64[ns]':
-            raise TypeError(f"Failed to normalize {self.timestamp_col} to datetime64[ns]. Got: {df[self.timestamp_col].dtype}")
+            raise TypeError(f"Critical error: column {self.timestamp_col} must be datetime64[ns]. Got: {df[self.timestamp_col].dtype}")
 
         # Удаление пустых дат
         nat_count = int(df[self.timestamp_col].isna().sum())
