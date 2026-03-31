@@ -18,13 +18,17 @@ class DeviationDetectorAgent:
 
     def _robust_to_datetime(self, series: pd.Series) -> pd.Series:
         """Sequential parser trying explicit formats to avoid inference crashes."""
+        # ЕСЛИ УЖЕ DATETIME-ТИП — НЕ ВЫЗЫВАЕМ pd.to_datetime ЗАНОВО!
+        # Это ломает cudf.pandas прокси (TypeError: Timestamp to Timestamp)
+        if pd.api.types.is_datetime64_any_dtype(series):
+            if hasattr(series, 'dt') and series.dt.tz is not None:
+                return series.dt.tz_convert('UTC').dt.tz_localize(None).astype('datetime64[ns]')
+            return series.astype('datetime64[ns]')
+
         formats = ['ISO8601', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%d.%m.%Y %H:%M:%S', '%d.%m.%Y']
         best_ts = None
         min_nat = len(series) + 1
         
-        if pd.api.types.is_datetime64_any_dtype(series):
-            return pd.to_datetime(series, utc=True, errors='coerce').dt.tz_localize(None).astype('datetime64[ns]')
-
         s_str = series.astype(str)
         for fmt in formats:
             try:

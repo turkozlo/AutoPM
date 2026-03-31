@@ -43,8 +43,14 @@ class DataFormatterAgent:
     def _robust_to_datetime(self, series: pd.Series) -> pd.Series:
         """
         Tries multiple explicit formats to find the best match for the dataset.
-        Avoids general pd.to_datetime() inference which can cause crashes.
+        Avoids general pd.to_datetime() inference which can cause crashes in cuDF.
         """
+        # ЕСЛИ УЖЕ DATETIME-ТИП — НЕ ВЫЗЫВАЕМ pd.to_datetime ЗАНОВО! Это ломает cudf
+        if pd.api.types.is_datetime64_any_dtype(series):
+            if hasattr(series, 'dt') and series.dt.tz is not None:
+                return series.dt.tz_convert('UTC').dt.tz_localize(None).astype('datetime64[ns]')
+            return series.astype('datetime64[ns]')
+
         formats = [
             'ISO8601', 
             '%Y-%m-%d %H:%M:%S', 
@@ -58,10 +64,6 @@ class DataFormatterAgent:
         best_ts = None
         min_nat = len(series) + 1
         
-        # Если это уже datetime, просто нормализуем
-        if pd.api.types.is_datetime64_any_dtype(series):
-            return pd.to_datetime(series, utc=True, errors='coerce').dt.tz_localize(None).astype('datetime64[ns]')
-
         s_str = series.astype(str)
         for fmt in formats:
             try:
