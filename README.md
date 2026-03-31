@@ -74,14 +74,12 @@ pip install -r requirements.txt
 ```
 
 ### 2. Подготовка RAG (Оффлайн-режим)
-Если вы запускаете систему без интернета, убедитесь, что модель скачана:
-```bash
-python download_model.py # Один раз для загрузки в models/
-```
+Если вы запускаете систему без интернета, убедитесь, что модель для эмбеддингов скачана и помещена в директорию `models/` (по умолчанию ожидается `models/multilingual-e5-large`).
 
 ### 3. Конфигурация (`config.yaml`)
+Обязательно создайте `config.yaml` на основе `config.example.yaml`:
 ```yaml
-provider: "mistral" # "mistral" или "local"
+provider: "mistral" # "mistral", "local" или "gigachat"
 mistral:
   api_key: "YOUR_KEY"
 rag:
@@ -111,7 +109,7 @@ python -m cudf.pandas pm_agent/main.py --file "log.csv"
 | **Sandbox** | Ограниченные `builtins` (нет `open`, `exec`, `eval`, `import`) |
 | **White-list** | Доступны только `df`, `pd`, `np`, `plt` |
 | **Linux Fix** | Специальные правила для безопасной сортировки дат на Linux |
-| **Timeout** | Защита от бесконечных циклов |
+| **Timeout** | Защита от бесконечных циклов (Unix-only) |
 
 ---
 
@@ -133,8 +131,8 @@ AutoPM/
 
 ## 🧰 Стек технологий
 
-*   **LLM**: Mistral API / Local Llama (via OpenAI compatible API)
+*   **LLM**: Mistral API / Local Llama / GigaChat
 *   **Embeddings**: multilingual-e5-large (Local)
 *   **Vector DB**: FAISS
-*   **Analysis**: PM4Py, Pandas, SciPy, NumPy
+*   **Analysis**: PM4Py (Customized for Linux stability), Pandas 2.2.3+, NumPy
 *   **Viz**: Matplotlib
