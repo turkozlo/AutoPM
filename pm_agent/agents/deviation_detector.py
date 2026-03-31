@@ -17,29 +17,31 @@ class DeviationDetectorAgent:
         self.quality_report = {}
 
     def preprocess_event_log(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        # КРИТИЧЕСКИЙ ШАГ: Принудительный перевод в ЧИСТЫЙ Pandas (CPU).
+        # Это убивает любые связи с cudf.pandas proxy, которые ломают pm4py на Linux.
         if hasattr(df, 'to_pandas'):
             df = df.to_pandas()
+        else:
+            # Трюк для обхода системного перехвата cudf.pandas:
+            # Превращаем в словарь и обратно в новый DataFrame.
+            df = pd.DataFrame(df.to_dict('list'))
 
         self.quality_report = {
             'original_rows': len(df),
-            'original_cases': df[self.case_col].nunique(),
+            'original_cases': df[self.case_col].nunique() if self.case_col in df.columns else 0,
             'warnings': []
         }
 
-        df = df.copy()
-
         # 1. ОБЕСПЕЧИВАЕМ ТИП DATETIME И ФОРМАТИРОВАНИЕ PM4PY
         try:
+            # Используем apply(pd.to_datetime) для обхода ограничений cudf на Series
             if not pd.api.types.is_datetime64_any_dtype(df[self.timestamp_col]):
-                df[self.timestamp_col] = pd.to_datetime(df[self.timestamp_col], errors='coerce', utc=True)
+                df[self.timestamp_col] = pd.to_datetime(df[self.timestamp_col].astype(str), errors='coerce', utc=True)
             
             # Удаление пустых дат ДО форматирования
-            nat_count = int(df[self.timestamp_col].isna().sum())
-            if nat_count > 0:
-                self.quality_report['warnings'].append(f'Удалено {nat_count} строк с невалидным timestamp (NaT)')
-                df = df.dropna(subset=[self.timestamp_col])
+            df = df.dropna(subset=[self.timestamp_col])
 
-            # ИСПОЛЬЗУЕМ СТАНДАРТНОЕ ФОРМАТИРОВАНИЕ PM4PY (Самый стабильный путь на Linux)
+            # ИСПОЛЬЗУЕМ СТАНДАРТНОЕ ФОРМАТИРОВАНИЕ PM4PY
             df = pm4py.format_dataframe(
                 df, 
                 case_id=self.case_col, 
@@ -47,46 +49,38 @@ class DeviationDetectorAgent:
                 timestamp_key=self.timestamp_col
             )
         except Exception as e:
-            self.quality_report['warnings'].append(f'pm4py formatting error: {e}. Using manual mapping.')
-            df['case:concept:name'] = df[self.case_col].astype(str)
-            df['concept:name'] = df[self.activity_col].astype(str)
-            df['time:timestamp'] = pd.to_datetime(df[self.timestamp_col], errors='coerce', utc=True)
+            # Ручной фолбэк, если всё равно что-то пошло не так
+            self.quality_report['warnings'].append(f'Formatting warning: {e}')
+            df = df.rename(columns={
+                self.case_col: 'case:concept:name',
+                self.activity_col: 'concept:name',
+                self.timestamp_col: 'time:timestamp'
+            })
+            df['time:timestamp'] = pd.to_datetime(df['time:timestamp'], errors='coerce', utc=True)
             df = df.dropna(subset=['time:timestamp'])
 
-        # 2. КРИТИЧЕСКИЙ ШАГ ДЛЯ LINUX: Конвертация в pydatetime
+        # 2. КРИТИЧЕСКИЙ ШАГ ИЗ СТАРОЙ ВЕРСИИ: Конвертация в pydatetime
+        # Это гарантирует, что pm4py работает с нативными объектами Python, а не с типами NumPy/cudf
         df['time:timestamp'] = [
             t.to_pydatetime() if hasattr(t, 'to_pydatetime') else t 
             for t in df['time:timestamp']
         ]
 
-        # 3. Безопасная сортировка
+        # 3. Безопасная сортировка и финализация (уже в режиме Pure Pandas)
         df = df.sort_values(['case:concept:name', 'time:timestamp']).reset_index(drop=True)
 
         for col in ['case:concept:name', 'concept:name']:
-            na_count = int(df[col].isna().sum())
-            if na_count > 0:
-                df = df.dropna(subset=[col])
             df[col] = df[col].astype(str).str.strip()
 
         # Remove duplicates
         before = len(df)
         df = df.drop_duplicates(subset=['case:concept:name', 'concept:name', 'time:timestamp'])
-        dup_count = before - len(df)
-        if dup_count > 0:
-            self.quality_report['warnings'].append(f'Удалено {dup_count} полных дубликатов')
-
-        # Single-event cases
-        case_sizes = df.groupby('case:concept:name').size()
-        single_event = case_sizes[case_sizes == 1]
-        if len(single_event) > 0:
-            self.quality_report['warnings'].append(
-                f'Исключено {len(single_event)} кейсов с одним событием из временного анализа'
-            )
-
+        
         self.quality_report['clean_rows'] = len(df)
         self.quality_report['clean_cases'] = df['case:concept:name'].nunique()
         self.quality_report['unique_activities'] = df['concept:name'].nunique()
         
+        # Безопасный расчет диапазона
         ts_series = pd.to_datetime(df['time:timestamp'])
         self.quality_report['date_range'] = (ts_series.min(), ts_series.max())
 

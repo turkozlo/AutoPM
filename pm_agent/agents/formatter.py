@@ -43,11 +43,10 @@ class DataFormatterAgent:
     def _robust_to_datetime(self, series: pd.Series) -> pd.Series:
         """
         Exclusive point for datetime conversion. 
-        Uses "String-First" approach to guarantee stability in cuDF/RAPIDS.
+        Uses list conversion to bypass cudf.pandas proxy limitations.
         """
-        # Превращаем всё в строки — это УБИВАЕТ внутренние объекты Timestamp,
-        # которые вызывают TypeError в cudf.pandas при повторном парсинге.
-        s_str = series.astype(str)
+        # Превращаем в список строк — это гарантированно обходит любые прокси cudf
+        s_list = series.astype(str).tolist()
         
         formats = [
             'ISO8601', 
@@ -62,13 +61,13 @@ class DataFormatterAgent:
         ]
         
         best_ts = None
-        min_nat = len(series) + 1
+        min_nat = len(s_list) + 1
         
         for fmt in formats:
             try:
-                # Парсим из ЧИСТЫХ СТРОК
-                ts = pd.to_datetime(s_str, format=fmt, errors='coerce', utc=True)
-                nat_count = ts.isna().sum()
+                # Работаем через pd.to_datetime на списке (это безопасно в cudf.pandas)
+                ts = pd.to_datetime(s_list, format=fmt, errors='coerce', utc=True)
+                nat_count = pd.Series(ts).isna().sum()
                 if nat_count < min_nat:
                     min_nat = nat_count
                     best_ts = ts
@@ -77,10 +76,10 @@ class DataFormatterAgent:
                 continue
         
         if best_ts is None:
-            # Если ничего не подошло, пробуем общий парсинг (но тоже из строк!)
-            best_ts = pd.to_datetime(s_str, errors='coerce', utc=True)
+            best_ts = pd.to_datetime(s_list, errors='coerce', utc=True)
             
-        return best_ts.dt.tz_localize(None).astype('datetime64[ns]')
+        # Возвращаем как Series с CPU-типом datetime64[ns]
+        return pd.Series(best_ts).dt.tz_localize(None).astype('datetime64[ns]')
 
     def run(self) -> pd.DataFrame:
         """
