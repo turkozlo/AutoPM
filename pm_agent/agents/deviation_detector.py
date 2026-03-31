@@ -141,9 +141,9 @@ class DeviationDetectorAgent:
         next_ts_raw = df.groupby(case_col)[ts_col].shift(-1)
 
         # Максимально быстрая арифметика через .view('int64') 
-        # (не требует повторного парсинга или кастования)
-        CUR_INT = df[ts_col].values.view('int64')
-        NXT_INT = next_ts_raw.values.view('int64')
+        # Добавляем .astype('datetime64[ns]') для работы с object-массивами (cudf-proxy)
+        CUR_INT = df[ts_col].values.astype('datetime64[ns]').view('int64')
+        NXT_INT = next_ts_raw.values.astype('datetime64[ns]').view('int64')
         iNaT = np.iinfo(np.int64).min
         valid = (CUR_INT != iNaT) & (NXT_INT != iNaT)
         duration_ns = np.where(valid, NXT_INT - CUR_INT, np.nan)
@@ -161,8 +161,9 @@ class DeviationDetectorAgent:
         ts_col = 'time:timestamp'
         case_dur = df_dur.groupby(case_col)[ts_col].agg(['min', 'max'])
         # Тот же высокопроизводительный подход через .view('int64')
-        min_int = case_dur['min'].values.view('int64')
-        max_int = case_dur['max'].values.view('int64')
+        # Гарантируем тип для работы с object-массивами (cudf-proxy)
+        min_int = case_dur['min'].values.astype('datetime64[ns]').view('int64')
+        max_int = case_dur['max'].values.astype('datetime64[ns]').view('int64')
         case_dur['duration_h'] = (max_int - min_int) / 3.6e12
         return case_dur
 
