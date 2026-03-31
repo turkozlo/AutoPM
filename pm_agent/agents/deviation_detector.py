@@ -28,67 +28,67 @@ class DeviationDetectorAgent:
 
         df = df.copy()
 
-        # 1. ОБЕСПЕЧИВАЕМ ТИП DATETIME (ОДИН РАЗ)
-        # Если колонка еще не datetime (например, только что прочитали из XES),
-        # переводим её максимально безопасным способом (через строку).
-        if not pd.api.types.is_datetime64_any_dtype(df[self.timestamp_col]):
-            df[self.timestamp_col] = pd.to_datetime(
-                df[self.timestamp_col].astype(str), errors='coerce', utc=True
-            ).dt.tz_localize(None).astype('datetime64[ns]')
+        # 1. ОБЕСПЕЧИВАЕМ ТИП DATETIME И ФОРМАТИРОВАНИЕ PM4PY
+        try:
+            if not pd.api.types.is_datetime64_any_dtype(df[self.timestamp_col]):
+                df[self.timestamp_col] = pd.to_datetime(df[self.timestamp_col], errors='coerce', utc=True)
+            
+            # Удаление пустых дат ДО форматирования
+            nat_count = int(df[self.timestamp_col].isna().sum())
+            if nat_count > 0:
+                self.quality_report['warnings'].append(f'Удалено {nat_count} строк с невалидным timestamp (NaT)')
+                df = df.dropna(subset=[self.timestamp_col])
 
-        # Жесткий инвариант для анализа
-        if df[self.timestamp_col].dtype != 'datetime64[ns]':
-            raise TypeError(f"Critical error: column {self.timestamp_col} must be datetime64[ns]. Got: {df[self.timestamp_col].dtype}")
+            # ИСПОЛЬЗУЕМ СТАНДАРТНОЕ ФОРМАТИРОВАНИЕ PM4PY (Самый стабильный путь на Linux)
+            df = pm4py.format_dataframe(
+                df, 
+                case_id=self.case_col, 
+                activity_key=self.activity_col, 
+                timestamp_key=self.timestamp_col
+            )
+        except Exception as e:
+            self.quality_report['warnings'].append(f'pm4py formatting error: {e}. Using manual mapping.')
+            df['case:concept:name'] = df[self.case_col].astype(str)
+            df['concept:name'] = df[self.activity_col].astype(str)
+            df['time:timestamp'] = pd.to_datetime(df[self.timestamp_col], errors='coerce', utc=True)
+            df = df.dropna(subset=['time:timestamp'])
 
-        # Удаление пустых дат
-        nat_count = int(df[self.timestamp_col].isna().sum())
-        if nat_count > 0:
-            self.quality_report['warnings'].append(f'Удалено {nat_count} строк с невалидным timestamp (NaT)')
-            df = df.dropna(subset=[self.timestamp_col])
+        # 2. КРИТИЧЕСКИЙ ШАГ ДЛЯ LINUX: Конвертация в pydatetime
+        df['time:timestamp'] = [
+            t.to_pydatetime() if hasattr(t, 'to_pydatetime') else t 
+            for t in df['time:timestamp']
+        ]
 
-        # 2. Безопасная сортировка (обход багов Pandas/cuDF на Linux)
-        # TRULY NUCLEAR: pd.to_numeric(pd.to_datetime(...)) для всех типов массивов
-        df['_sort_ts'] = pd.to_numeric(pd.to_datetime(df[self.timestamp_col], errors='coerce')).fillna(0).astype('int64')
-        df = df.sort_values([self.case_col, '_sort_ts']).reset_index(drop=True)
-        df = df.drop(columns=['_sort_ts'])
+        # 3. Безопасная сортировка
+        df = df.sort_values(['case:concept:name', 'time:timestamp']).reset_index(drop=True)
 
-        # Timezone уже обработана при парсинге (utc=True + tz_localize(None))
-
-        # Null/NaN in case_id and activity
-        for col, name in [(self.case_col, 'case_id'), (self.activity_col, 'activity')]:
+        for col in ['case:concept:name', 'concept:name']:
             na_count = int(df[col].isna().sum())
             if na_count > 0:
-                self.quality_report['warnings'].append(f'Удалено {na_count} строк с пустым {name}')
                 df = df.dropna(subset=[col])
-            df[col] = df[col].astype(str)
-
-        df[self.activity_col] = df[self.activity_col].str.strip()
+            df[col] = df[col].astype(str).str.strip()
 
         # Remove duplicates
         before = len(df)
-        df = df.drop_duplicates(subset=[self.case_col, self.activity_col, self.timestamp_col])
+        df = df.drop_duplicates(subset=['case:concept:name', 'concept:name', 'time:timestamp'])
         dup_count = before - len(df)
         if dup_count > 0:
-            self.quality_report['warnings'].append(f'Удалено {dup_count} полных дубликатов (case+activity+timestamp)')
+            self.quality_report['warnings'].append(f'Удалено {dup_count} полных дубликатов')
 
         # Single-event cases
-        case_sizes = df.groupby(self.case_col).size()
+        case_sizes = df.groupby('case:concept:name').size()
         single_event = case_sizes[case_sizes == 1]
         if len(single_event) > 0:
             self.quality_report['warnings'].append(
-                f'Обнаружено {len(single_event)} кейсов с одним событием '
-                f'— они исключены из временного анализа'
+                f'Исключено {len(single_event)} кейсов с одним событием из временного анализа'
             )
-
-        # Formatting for pm4py
-        df['case:concept:name'] = df[self.case_col]
-        df['concept:name'] = df[self.activity_col]
-        df['time:timestamp'] = df[self.timestamp_col]
 
         self.quality_report['clean_rows'] = len(df)
         self.quality_report['clean_cases'] = df['case:concept:name'].nunique()
         self.quality_report['unique_activities'] = df['concept:name'].nunique()
-        self.quality_report['date_range'] = (df['time:timestamp'].min(), df['time:timestamp'].max())
+        
+        ts_series = pd.to_datetime(df['time:timestamp'])
+        self.quality_report['date_range'] = (ts_series.min(), ts_series.max())
 
         return df, self.quality_report
 
@@ -133,23 +133,15 @@ class DeviationDetectorAgent:
         ts_col = 'time:timestamp'
         act_col = 'concept:name'
 
-        # Сортировка перед shift: используем TRULY NUCLEAR прокси
-        df['_sort_ts'] = pd.to_numeric(pd.to_datetime(df[ts_col], errors='coerce')).fillna(0).astype('int64')
-        df = df.sort_values([case_col, '_sort_ts']).reset_index(drop=True)
-        df = df.drop(columns=['_sort_ts'])
+        # Сортировка перед shift: максимально стабильный способ (через pandas datetime)
+        df = df.sort_values([case_col, ts_col]).reset_index(drop=True)
 
-        # Shift для вычисления времени следующего события
-        next_ts_raw = df.groupby(case_col)[ts_col].shift(-1)
-
-        # ТЕХНОЛОГИЯ "TRULY NUCLEAR": Используем самый стабильный путь через pd.to_numeric
-        # Это обходит все баги NumPy и cuDF с объектными массивами и NaT
-        CUR_INT = pd.to_numeric(pd.to_datetime(df[ts_col], errors='coerce')).fillna(0).astype('int64').values
-        NXT_INT = pd.to_numeric(pd.to_datetime(next_ts_raw, errors='coerce')).fillna(0).astype('int64').values
-        iNaT = np.iinfo(np.int64).min
-        valid = (CUR_INT != iNaT) & (NXT_INT != iNaT)
-        duration_ns = np.where(valid, NXT_INT - CUR_INT, np.nan)
-        df['next_ts'] = next_ts_raw
-        df['duration_h'] = duration_ns / 3.6e12  # ns → hours
+        # Вычисляем длительность в часах через стандартный Pandas dt.total_seconds()
+        # Это обходит все проблемы с ручным вычитанием наносекунд и переполнением типов.
+        ts_converted = pd.to_datetime(df[ts_col])
+        next_ts = ts_converted.groupby(df[case_col]).shift(-1)
+        
+        df['duration_h'] = (next_ts - ts_converted).dt.total_seconds() / 3600.0
         df.loc[df['duration_h'] < 0, 'duration_h'] = np.nan
 
         df['prev_act'] = df.groupby(case_col)[act_col].shift(1)
@@ -160,11 +152,15 @@ class DeviationDetectorAgent:
     def _calculate_case_durations(self, df_dur: pd.DataFrame) -> pd.DataFrame:
         case_col = 'case:concept:name'
         ts_col = 'time:timestamp'
+        
+        # Находим разницу между макс и мин временем кейса
         case_dur = df_dur.groupby(case_col)[ts_col].agg(['min', 'max'])
-        # ТЕХНОЛОГИЯ "TRULY NUCLEAR": Максимальная стабильность через pd.to_numeric
-        min_int = pd.to_numeric(pd.to_datetime(case_dur['min'], errors='coerce')).fillna(0).astype('int64').values
-        max_int = pd.to_numeric(pd.to_datetime(case_dur['max'], errors='coerce')).fillna(0).astype('int64').values
-        case_dur['duration_h'] = (max_int - min_int) / 3.6e12
+        
+        # Конвертация в Series для вычисления diff (так как в колонках сейчас могут быть pydatetime)
+        c_min = pd.to_datetime(case_dur['min'])
+        c_max = pd.to_datetime(case_dur['max'])
+        
+        case_dur['duration_h'] = (c_max - c_min).dt.total_seconds() / 3600.0
         return case_dur
 
     # --- Детекторы базовых неэффективностей ---
