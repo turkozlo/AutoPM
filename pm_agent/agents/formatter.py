@@ -71,10 +71,10 @@ class DataFormatterAgent:
             if target_type == 'datetime' or self._is_datetime_like(df_new[col]):
                 try:
                     # ПРАВИЛЬНЫЙ ПАРСИНГ: (Отказ от String-First)
-                    # 1. Парсим в UTC
+                    # 1. Парсим в UTC (Явно указываем ISO8601 для стабильности)
                     # 2. Убираем таймзону
                     # 3. Принудительно ставим тип datetime64[ns]
-                    ts = pd.to_datetime(df_new[col], utc=True, errors='coerce')
+                    ts = pd.to_datetime(df_new[col], format='ISO8601', utc=True, errors='coerce')
                     df_new[col] = ts.dt.tz_localize(None).astype('datetime64[ns]')
                     
                     print(f"Column '{col}' FORCED to datetime64[ns]")

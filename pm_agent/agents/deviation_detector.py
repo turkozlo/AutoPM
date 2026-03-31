@@ -30,7 +30,8 @@ class DeviationDetectorAgent:
 
         # 1. ПРИНУДИТЕЛЬНЫЙ ПАРСИНГ ПРАВИЛЬНОГО ТИПА (Invariant: datetime64[ns])
         # Отказ от String-First для скорости и стабильности.
-        ts = pd.to_datetime(df[self.timestamp_col], errors='coerce', utc=True)
+        # Используем явный формат ISO8601, как подтверждено тестами пользователя.
+        ts = pd.to_datetime(df[self.timestamp_col], format='ISO8601', errors='coerce', utc=True)
         ts = ts.dt.tz_localize(None)
         df[self.timestamp_col] = ts.values.astype('datetime64[ns]')
 
