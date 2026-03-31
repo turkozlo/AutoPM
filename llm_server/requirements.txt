@@ -1,0 +1,7 @@
+torch>=2.4.0
+transformers==4.46.1
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+sentence-transformers>=3.0.0
+anyio>=4.0.0

@@ -1,10 +1,7 @@
-import json
-import re
-
+import time
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_mistralai import ChatMistralAI
 from openai import OpenAI
-
 from .config import (
     LOCAL_API_KEY,
     LOCAL_BASE_URL,
@@ -12,21 +9,19 @@ from .config import (
     MISTRAL_API_KEY,
     MISTRAL_MODEL,
     PROVIDER,
+    GIGACHAT_BASE_URL,
+    GIGACHAT_ACCESS_TOKEN,
+    GIGACHAT_MODEL,
 )
-
 
 class LocalLLMClient:
     """Wrapper for native OpenAI client to match langchain interface."""
-
-    def __init__(
-        self, base_url: str, model: str, api_key: str, temperature: float = 0.2
-    ):
+    def __init__(self, base_url: str, model: str, api_key: str, temperature: float = 0.2):
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
         self.temperature = temperature
 
-    def invoke(self, messages: list) -> "LocalLLMResponse":
-        """Invoke the local LLM with langchain-style messages."""
+    def invoke(self, messages: list, **kwargs) -> "LocalLLMResponse":
         formatted_messages = []
         for msg in messages:
             if hasattr(msg, "content"):
@@ -36,17 +31,13 @@ class LocalLLMClient:
                 formatted_messages.append(msg)
 
         response = self.client.chat.completions.create(
-            model=self.model, messages=formatted_messages, temperature=self.temperature
+            model=self.model, messages=formatted_messages, temperature=self.temperature, **kwargs
         )
         return LocalLLMResponse(response.choices[0].message.content)
 
-
 class LocalLLMResponse:
-    """Simple response wrapper to match langchain response interface."""
-
     def __init__(self, content: str):
         self.content = content
-
 
 class LLMClient:
     def __init__(self, rag_manager=None):
@@ -58,54 +49,38 @@ class LLMClient:
                 api_key=LOCAL_API_KEY,
                 temperature=0.2,
             )
+        elif PROVIDER == "gigachat":
+            from langchain_gigachat.chat_models import GigaChat
+            self.client = GigaChat(
+                base_url=GIGACHAT_BASE_URL,
+                access_token=GIGACHAT_ACCESS_TOKEN,
+                model=GIGACHAT_MODEL,
+            )
         else:
             self.client = ChatMistralAI(
-                model=MISTRAL_MODEL, api_key=MISTRAL_API_KEY, temperature=0.2
+                model_name=MISTRAL_MODEL, api_key=MISTRAL_API_KEY, temperature=0.2
             )
 
     def _parse_json(self, response_str: str) -> dict:
-        """Robustly parse JSON from LLM response."""
-        if not response_str:
-            return None
-
-        cleaned_str = response_str.strip()
-
-        # 1. Simple try
-        try:
-            return json.loads(cleaned_str)
-        except json.JSONDecodeError:
-            pass
-
-        # 2. Strip markdown blocks
-        if "```json" in cleaned_str:
-            try:
-                # Extract content between ```json and ```
-                json_block = cleaned_str.split("```json")[1].split("```")[0].strip()
-                return json.loads(json_block)
-            except (IndexError, json.JSONDecodeError):
-                pass
-        elif "```" in cleaned_str:
-            # Try generic ``` blocks
-            try:
-                parts = cleaned_str.split("```")
-                for part in parts:
-                    part = part.strip()
-                    if part.startswith("{") or part.startswith("["):
-                        try:
-                            return json.loads(part)
-                        except json.JSONDecodeError:
-                            continue
-            except IndexError:
-                pass
-
-        # 3. Regex search for first { or [ to last } or ]
-        json_match = re.search(r"(\{.*\}|\[.*\])", cleaned_str, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(0))
-            except (json.JSONDecodeError, ValueError):
-                pass
-
+        """Helper for internal needs (formatter.py still uses JSON)."""
+        import json
+        import re
+        if not response_str: return None
+        # Clean potential markdown blocks
+        clean_str = response_str
+        if "```json" in response_str:
+            clean_str = response_str.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_str:
+             clean_str = response_str.split("```")[1].split("```")[0].strip()
+        
+        try: return json.loads(clean_str)
+        except: pass
+        
+        # Try regex if standard parsing fails
+        match = re.search(r"(\{.*\})", clean_str, re.DOTALL)
+        if match:
+            try: return json.loads(match.group(1))
+            except: pass
         return None
 
     def generate_response(
@@ -117,291 +92,125 @@ class LLMClient:
         """
         Generates a response from the LLM with retry logic for rate limits.
         """
-        import time
-
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=prompt)]
 
+        current_delay = 2.0
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                # Remove max_tokens argument to let the model generate until it stops naturally
                 response = self.client.invoke(messages)
                 return response.content
             except Exception as e:
-                if "429" in str(e) and attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 5
-                    print(f"Превышен лимит запросов (429). Ожидание {wait_time} сек...")
-                    time.sleep(wait_time)
+                error_str = str(e)
+                if ("429" in error_str or "Too Many Requests" in error_str) and attempt < max_retries - 1:
+                    print(f"Превышен лимит запросов (429). Ожидание {current_delay} сек... (Попытка {attempt + 1}/{max_retries})")
+                    time.sleep(current_delay)
+                    current_delay *= 2  # Exponential backoff
                     continue
                 print(f"Ошибка при генерации ответа: {e}")
                 return f"Ошибка: {e}"
         return "Ошибка: Превышено количество попыток."
 
-    def analyze_data_cleaning(
-        self, data_head: str, data_info: str, feedback: str = ""
-    ) -> str:
+    def simple_chat(self, user_query: str, context: str, history: list = None) -> dict:
         """
-        Asks LLM how to clean the data based on head and info.
-        Returns a JSON-like string or instructions.
-        """
-        system_prompt = (
-            "Ты опытный Data Scientist. Твоя задача — проанализировать структуру датасета и предложить операции по очистке. "
-            "Ты получишь первые несколько строк (head) и вывод info(). "
-            "Определи столбцы с пропущенными значениями (NaN) и реши, что делать: "
-            "1. Удалить строку (drop_row), если отсутствуют критические данные. "
-            "2. Заполнить средним (fill_mean) для числовых данных. "
-            "3. Заполнить модой (fill_mode) или заполнителем для категориальных данных. "
-            "Верни ответ в виде валидного JSON списка действий, например: "
-            '[{"column": "Age", "action": "fill_mean"}, {"column": "ID", "action": "drop_row"}]'
-        )
-        prompt = f"Data Head:\n{data_head}\n\nData Info:\n{data_info}"
-        if feedback:
-            prompt += f"\n\nЗАМЕЧАНИЯ СУДЬИ (ИСПРАВЬ ЭТО): {feedback}"
-
-        return self.generate_response(prompt, system_prompt)
-
-    def judge_step(self, step_name: str, context: str, result: str) -> dict:
-        """
-        Evaluates the result of a step.
-        Returns a dict with 'passed' (bool), 'critique' (str), and 'score' (int).
-        """
-        system_prompt = (
-            "Ты строгий, но разумный Судья (Judge). Твоя задача — оценивать качество выполнения шага агентом Process Mining.\n"
-            "ПРАВИЛА:\n"
-            "1. Результат должен быть полным и полезным. Если данные не идеальны, но агент сделал всё возможное — ПРИНИМАЙ работу.\n"
-            "2. Используй чек-лист, соответствующий шагу.\n"
-            "3. Если отклоняешь, дай КОНКРЕТНУЮ инструкцию, как исправить. Твоя критика будет передана агенту как обратная связь.\n"
-            "4. ВАЖНО: Валидные пути к файлам (.png) — это главное доказательство успеха для визуализаций.\n"
-            "5. Будь терпим к мелким недочетам в форматировании, если суть (цифры, графики) верна.\n"
-            "ЧЕК-ЛИСТЫ:\n"
-            "- Data Profiling: посчитаны ли основные статистики? Есть ли вывод о готовности (даже если он негативный)?\n"
-            "- Data Cleaning: есть ли план и отчет о действиях? (Если удалено 0 строк — это ОК, если данные были чистыми).\n"
-            "- Visualization: созданы ли графики? (Если какие-то не создались из-за данных — это допустимо, если есть объяснение).\n"
-            "- Process Discovery: построена ли схема? (Или объяснено, почему (циклы/шум)).\n"
-            "- Process Analysis: есть ли цифры производительности?\n"
-            "Верни JSON: {'passed': bool, 'critique': str, 'score': int}"
-        )
-
-        prompt = f"Шаг: {step_name}\nКонтекст: {context}\nРезультат агента: {result}"
-        response = self.generate_response(prompt, system_prompt)
-
-        parsed = self._parse_json(response)
-        if parsed:
-            return parsed
-
-        return {
-            "passed": True,
-            "critique": f"Не удалось разобрать ответ Судьи, пропускаем. Raw: {response[:100]}",
-            "score": 5,
-        }
-
-    def judge_cumulative_progress(
-        self, memory: str, artifacts_count: int, cumulative_context: str = ""
-    ) -> dict:
-        """
-        Evaluates the cumulative progress of the session so far using full step outputs.
-        Returns {'passed': bool, 'critique': str}
-        """
-        system_prompt = (
-            "Ты — Главный Судья (Cumulative Judge). Твоя задача — оценивать, идет ли процесс Process Mining в правильном направлении.\n"
-            "ПРАВИЛА:\n"
-            "1. Изучи 'Cumulative Context' (полные результаты всех шагов) и количество созданных артефактов.\n"
-            "2. КРИТЕРИИ ОЦЕНКИ:\n"
-            "   - Агент следует логической цепочке? (Profiling -> Cleaning -> Discovery/Visualization -> Analysis -> Reporting).\n"
-            "   - Если были ошибки, пытается ли агент их реально исправить (видно по изменениям в результатах), или просто повторяет команды?\n"
-            "   - Оцени качество КАЖДОГО инструмента. Например, если Discovery вернул пустую схему, а Cleaning был пропущен — это повод для перезапуска.\n"
-            "3. Решение о ПЕРЕЗАПУСКЕ (passed=False):\n"
-            "   - Если агент безнадежно застрял (одни и те же ошибки в результатах).\n"
-            "   - Если логика процесса критически нарушена.\n"
-            "   - Если результаты шагов выглядят фиктивными или пустыми (например, Reporting без данных).\n"
-            "4. Верни JSON: {'passed': bool, 'critique': str}"
-        )
-        prompt = f"Long-Term Memory Summary:\n{memory}\n\nArtifacts Count: {artifacts_count}\n\nCUMULATIVE CONTEXT (Raw Outputs):\n{cumulative_context}"
-
-        response = self.generate_response(prompt, system_prompt)
-
-        parsed = self._parse_json(response)
-        if parsed:
-            return parsed
-
-        return {"passed": True, "critique": f"Parsing error. Raw: {response[:100]}"}
-
-    def reflect_on_result(self, context: str, result: str) -> dict:
-        # Legacy reflection method, kept for compatibility but Judge is preferred now
-        return self.judge_step("Reflection", context, result)
-
-    def update_memory(
-        self, current_memory: str, step_name: str, step_result: str
-    ) -> str:
-        """
-        Updates the long-term memory with the result of a step.
-        """
-        system_prompt = (
-            "Ты — Менеджер Памяти агента Process Mining. Твоя задача — поддерживать актуальное и сжатое состояние процесса (Memory).\n"
-            "ПРАВИЛА:\n"
-            "1. ЧИТАЙ 'Current Memory' и 'Latest Tool Output'.\n"
-            "2. ДОБАВЬ новую информацию из Output в Memory. Сохраняй ТОЛЬКО факты: статус шага (Success/Fail), "
-            "ключевые цифры (кол-во строк, статистику), имена созданных файлов.\n"
-            "3. ВАЖНО: Если агент выявил ИНСАЙТЫ, АНОМАЛИИ, УЗКИЕ МЕСТА или предупреждения — ОБЯЗАТЕЛЬНО сохрани их! "
-            "Это нужно для консультации пользователя в конце.\n"
-            "4. УДАЛЯЙ устаревшие детали. Если была ошибка, но потом агент исправился — ошибку можно сократить до 'были проблемы, исправлено'.\n"
-            "5. НЕ копируй полные логи. Будь краток. Используй Markdown списки.\n"
-            "6. ОБЯЗАТЕЛЬНО сохраняй полный путь к каждому созданному файлу (report, image).\n"
-            "Верни ОБНОВЛЕННЫЙ текст Memory."
-        )
-        prompt = f"Current Memory:\n{current_memory}\n\nLatest Tool ({step_name}) Output:\n{step_result}"
-        return self.generate_response(prompt, system_prompt)
-
-    def answer_user_question(
-        self,
-        memory: str,
-        final_report: str,
-        chat_history: str,
-        question: str,
-        knowledge_base: str = "",
-        tools_desc: str = "",
-    ) -> dict:
-        """
-        Answers user questions based on memory, report, chat history, KNOWLEDGE BASE, and optionally using TOOLS.
-        Returns a JSON with 'answer', optional 'knowledge_update', and optional 'tool_call'.
-        """
-        import json
-
-        if tools_desc:
-            tools_section = (
-                f"\n\n=== ДОСТУПНЫЕ ИНСТРУМЕНТЫ АНАЛИЗА ===\n{tools_desc}\n"
-                "**run_complex_analysis** (description='Use ONLY for complex queries that standard tools cannot handle. "
-                "E.g. complex filtering, combining multiple metrics, advanced grouping.')\n"
-                "=== КОНЕЦ СПИСКА ИНСТРУМЕНТОВ ===\n\n"
-                "ПРАВИЛА ИСПОЛЬЗОВАНИЯ ИНСТРУМЕНТОВ:\n"
-                "- Если вопрос ТРИВИАЛЬНЫЙ (частота активностей, длительность кейсов) — используй стандартные инструменты.\n"
-                "- Если вопрос СЛОЖНЫЙ (фильтр 'начинается с X и заканчивается Y', 'средняя длительность по группе Z', "
-                "'медиана', 'перцентиль') — СРАЗУ используй `run_complex_analysis`!\n"
-                "  (Аргументы для `run_complex_analysis`: можно передать пустой JSON {}).\n"
-                "- ВНИМАТЕЛЬНО извлекай параметры из вопроса! Если спрашивают 'топ 10', 'последние 3' — передай это "
-                "в аргументы (top_n=10).\n"
-                # When используешь tool_call, поле answer оставь пустым (null).
-                "- When используешь tool_call, поле answer оставь пустым (null).\n"
-            )
-
-        # Human-friendly capabilities description
-        capabilities_text = (
-            "ЕСЛИ СПРАШИВАЮТ 'ЧТО ТЫ УМЕЕШЬ' — ответь ПОНЯТНЫМ языком:\n"
-            "Вот что я могу:\n"
-            "📊 **Отвечать на вопросы по твоим данным** — расскажу про найденные аномалии, узкие места, инсайты из анализа.\n"
-            "🔢 **Считать статистику** — средние, медианы, проценты, корреляции между любыми колонками.\n"
-            "🔍 **Фильтровать данные** — покажу только нужные записи по условию.\n"
-            "📈 **Анализировать процессы** — частота путей, длительность кейсов, самые частые активности.\n"
-            "🚧 **Искать проблемы** — узкие места, выбросы, аномальные кейсы.\n"
-            "💾 **Запоминать важное** — если скажешь 'запомни это', сохраню в базу знаний.\n"
-            "Просто спрашивай на обычном языке!\n\n"
-        )
-
-        system_prompt = (
-            "Ты — Эксперт-консультант по Process Mining с доступом к инструментам анализа данных.\n"
-            "\n"
-            "ИСТОЧНИКИ ДАННЫХ:\n"
-            "1. MEMORY — хронология действий агента.\n"
-            "2. FINAL REPORT — итоговый отчет с метриками.\n"
-            "3. KNOWLEDGE BASE — глоссарий и факты от пользователя.\n"
-            "4. CHAT HISTORY — история диалога.\n"
-            + tools_section
-            + "\n"
-            + capabilities_text
-            + "ПРАВИЛА:\n"
-            "1. Если CHAT HISTORY пуст — пользователь ещё ничего не спрашивал. НЕ выдумывай.\n"
-            "2. Если пользователь просит запомнить важное — сохрани в knowledge_update.\n"
-            "3. Если вопрос НЕ ОТНОСИТСЯ к анализу данных, процессу или предоставленной информации (некорректный, "
-            "личный, оскорбительный или просто 'болтовня') — НЕ ВЫЗЫВАЙ инструменты. "
-            "Ответь вежливо в поле 'answer', что ты — ИИ-аналитик и не можешь ответить на этот вопрос.\n"
-            "4. Если нужны РАСЧЕТЫ — используй tool_call, НЕ выдумывай цифры.\n"
-            "5. Отвечай на языке вопроса (русский), простым понятным языком.\n"
-            "\n"
-            "ФОРМАТ ОТВЕТА — СТРОГО JSON:\n"
-            "```json\n"
-            "{\n"
-            '  "answer": "Текст ответа (или null если вызываешь инструмент)",\n'
-            '  "knowledge_update": "Важный fact для сохранения (или null)",\n'
-            '  "tool_call": {"name": "имя_инструмента", "args": {"arg1": "val1"}} или null\n'
-            "}\n"
-            "```\n"
-            "ВАЖНО: Возвращай ТОЛЬКО JSON, без лишнего текста. Если вызываешь tool_call, answer ДОЛЖЕН быть null."
-        )
-
-        user_prompt = (
-            f"KNOWLEDGE BASE:\n{knowledge_base}\n\n"
-            f"MEMORY:\n{memory}\n\n"
-            f"FINAL REPORT:\n{final_report}\n\n"
-            f"CHAT HISTORY:\n{chat_history}\n\n"
-            f"USER QUESTION:\n{question}\n"
-        )
-
-        # Inject RAG context if available
-        if self.rag_manager:
-            rag_context = self.rag_manager.get_context_string(question)
-            user_prompt = rag_context + "\n\n" + user_prompt
-
-        response_str = self.generate_response(
-            user_prompt, system_prompt, json_mode=True
-        )
-        parsed = self._parse_json(response_str)
-        if parsed:
-            return parsed
-
-        # Fallback if model fails JSON
-        return {"answer": response_str, "knowledge_update": None, "tool_call": None}
-
-    def interpret_tool_result(self, question: str, tool_result: dict) -> dict:
-        """
-        Interprets tool result into a human-friendly answer.
+        Smart Router chat: answers directly or signals that code is needed.
+        Returns dict: {"answer": str | None, "needs_code": bool}
         """
         import json
 
         system_prompt = (
-            "Ты — Эксперт-консультант по Process Mining.\n"
-            "Пользователь задал вопрос, и был вызван инструмент анализа.\n"
-            "Твоя задача — превратить результат инструмента в понятный ответ.\n"
+            "Ты — Эксперт-консультант по Process Mining с доступом к данным и базе знаний о платформе.\n"
+            "ПРАВИЛА:\n"
+            "1. Если вопрос касается ФУНКЦИОНАЛА ПЛАТФОРМЫ (как строить графики, как запустить ML, "
+            "как удалять данные, интерфейс, настройки) — верни needs_rag: true.\n"
+            "2. Если вопрос требует РАСЧЕТОВ по текущему датасету (среднее, медиана, фильтрация, топ-N) "
+            "— верни needs_code: true.\n"
+            "3. Отвечай на простые вопросы о структуре данных напрямую, если расчет не требуется.\n"
+            "4. Формат ответа СТРОГО JSON.\n"
             "\n"
-            "ВАЖНО: НИКОГДА НЕ ВЫДУМЫВАЙ ЦИФРЫ.\n"
-            "- Если в результате НЕТ нужных данных (например, спросили про 10-й элемент, а их всего 5) -> "
-            "честно скажи: 'Инструмент вернул только 5 записей, я не вижу 10-ю'. НЕ пытайся угадать.\n"
-            "- Используй ТОЛЬКО факты из JSON.\n"
-            "\n"
-            "ФОРМАТ ВЫХОДА (JSON):\n"
-            '{"answer": "Человекочитаемый ответ..."}'
+            "ФОРМАТ ОТВЕТА:\n"
+            '{"answer": "Текст (если не нужен RAG/код)", "needs_code": false, "needs_rag": false}\n'
+            "Если нужен расчет:\n"
+            '{"answer": null, "needs_code": true, "needs_rag": false}\n'
+            "Если вопрос про инструкцию/платформу:\n"
+            '{"answer": null, "needs_code": false, "needs_rag": true}\n'
         )
 
-        user_prompt = (
-            f"ВОПРОС ПОЛЬЗОВАТЕЛЯ:\n{question}\n\n"
-            f"РЕЗУЛЬТАТ ИНСТРУМЕНТА:\n{json.dumps(tool_result, ensure_ascii=False, indent=2)}\n"
-        )
+        # Keyword detection for platform/instructions
+        platform_keywords = [
+            "как", "инструкция", "руководство", "платформа", "интерфейс", 
+            "настройк", "ml модель", "кластеризация", "удалит", "создать"
+        ]
+        
+        # Check for RAG intent first manually as a fallback/accelerator
+        if any(kw in user_query.lower() for kw in platform_keywords) and self.rag_manager:
+            # Let's see if LLM confirms or just use it
+            pass
 
-        response_str = self.generate_response(
-            user_prompt, system_prompt, json_mode=True
-        )
+        prompt_parts = [f"КОНТЕКСТ ДАННЫХ:\n{context}"]
+        if history:
+            prompt_parts.append("\nИСТОРИЯ ДИАЛОГА:")
+            for msg in history[-10:]:
+                role = "Пользователь" if msg["role"] == "user" else "Ассистент"
+                prompt_parts.append(f"{role}: {msg['text']}")
+        prompt_parts.append(f"\nВОПРОС ПОЛЬЗОВАТЕЛЯ:\n{user_query}")
+        prompt = "\n".join(prompt_parts)
+
+        response_str = self.generate_response(prompt, system_prompt)
         parsed = self._parse_json(response_str)
         if parsed:
+            # RAG Logic
+            if parsed.get("needs_rag") and self.rag_manager:
+                print("📚 Поиск в базе знаний...")
+                docs = self.rag_manager.retrieve(user_query, top_k=2)
+                if docs:
+                    for d in docs:
+                        print(f"   -> [{d['score']:.3f}] {d['title']}")
+
+                    doc_context = "\n\n".join([d["formatted"] for d in docs])
+                    source_paths = "\n".join([f"  - {d['path']}" for d in docs])
+
+                    rag_prompt = (
+                        f"Используя ТОЛЬКО следующие документы из базы знаний, "
+                        f"ответь на вопрос пользователя.\n"
+                        f"Если информации недостаточно — честно скажи об этом.\n"
+                        f"В конце ответа ОБЯЗАТЕЛЬНО укажи источники.\n\n"
+                        f"{doc_context}\n\n"
+                        f"ВОПРОС: {user_query}\n\n"
+                        f"ИСТОЧНИКИ:\n{source_paths}"
+                    )
+                    rag_answer = self.generate_response(
+                        rag_prompt,
+                        "Ты технический писатель Платформы Process Mining. "
+                        "Отвечай структурированно и по существу."
+                    )
+                    return {"answer": rag_answer, "needs_code": False, "needs_rag": True}
+                else:
+                    return {
+                        "answer": "К сожалению, в базе знаний нет информации по вашему вопросу.",
+                        "needs_code": False, "needs_rag": True,
+                    }
+
             return parsed
 
-        return {"answer": str(tool_result)}
+        # Fallback: if JSON parsing failed, return as plain text answer
+        return {"answer": response_str, "needs_code": False, "needs_rag": False}
+
+    # ------------------------------------------------------------------
+    #  Code Interpreter methods
+    # ------------------------------------------------------------------
 
     def generate_pandas_code(
-        self,
-        question: str,
-        df_info: str,
-        previous_error: str = "",
-        context: dict = None,
+        self, question: str, df_info: str, previous_error: str = "", context: dict = None
     ) -> dict:
         """
-        Generates pandas code to answer the user's question, using full context.
-        context keys: 'knowledge_base', 'memory', 'final_report'
+        Generates pandas code to answer the user's question.
+        Returns: {"thought": str, "code": str}
         """
         import json
 
         context = context or {}
-        knowledge_base = context.get("knowledge_base", "")
-        memory = context.get("memory", "")
-        final_report = context.get("final_report", "")
-
         error_context = ""
         if previous_error:
             error_context = f"\n\nПРЕДЫДУЩАЯ ПОПЫТКА ЗАВЕРШИЛАСЬ ОШИБКОЙ:\n{previous_error}\nИСПРАВЬ КОД!\n"
@@ -413,32 +222,39 @@ class LLMClient:
             "- df: pandas DataFrame с данными (Process Mining Event Log)\n"
             "- pd: pandas библиотека\n"
             "- np: numpy библиотека\n"
+            "- plt: matplotlib.pyplot для визуализации\n"
             "\n"
             "ТЕРМИНОЛОГИЯ PROCESS MINING:\n"
-            "- АКТИВНОСТЬ (Activity, Operation) = Событие, строка в логе. Частота активностей = df['activity_col'].value_counts().\n"
-            "- ПУТЬ/ТРЕЙС (Path, Trace, Variant) = ПОСЛЕДОВАТЕЛЬНОСТЬ активностей для одного case_id.\n"
-            "  ВАЖНО: Для анализа путей, собери их в СТРОКУ через разделитель: .apply(lambda x: ' -> '.join(x)).\n"
-            "  НЕ работай со списками или кортежами в индексах (value_counts на списках вызовет ошибку!).\n"
-            "\n"
-            "PANDAS BEST PRACTICES (ЧТОБЫ ИЗБЕЖАТЬ ОШИБОК):\n"
-            "1. `value_counts()` возвращает Series. У неё НЕТ `.to_dict()` для строки. "
-            "Чтобы получить словарь {{index: ..., count: ...}}, используй `.reset_index().iloc[i].to_dict()`.\n"
-            "   - ПЛОХО: `vc.iloc[0].to_dict()` (AttributeError)\n"
-            "   - ХОРОШО: `vc.reset_index().iloc[0].to_dict()`\n"
-            "2. ПРОВЕРЯЙ ГРАНИЦЫ ИНДЕКСА! Если просят 10000-й элемент, проверь `len(df) > 9999`.\n"
-            "   - `idx = 9999; result = vc.index[idx] if len(vc) > idx else 'Элемент не найден'`\n"
-            "3. `.iloc[i]` возвращает скаляр (numpy type). Используй `.item()` чтобы сделать его Python-типом.\n"
-            "4. ВРЕМЯ (Duration): Перед расчетом времени ВСЕГДА делай `.sort_values('timestamp')`. Иначе получишь отрицательное время!\n"
-            "5. ФИЛЬТР ПО ПУТИ (Starts/Ends with): НЕ используй `df[df.col.isin(...)]` — это ломает порядок. "
-            "Правильно: `df.groupby(case).filter(lambda x: x.iloc[0]==Start and x.iloc[-1]==End)`.\n"
+            "- АКТИВНОСТЬ (Activity) = Событие, строка в логе.\n"
+            "- ПУТЬ/ТРЕЙС (Trace, Variant) = ПОСЛЕДОВАТЕЛЬНОСТЬ активностей для одного case_id.\n"
+            "  Для анализа путей собери их в СТРОКУ: .apply(lambda x: ' -> '.join(x)).\n"
             "\n"
             "ПРАВИЛА:\n"
-            "1. ОБЯЗАТЕЛЬНО сохрани финальный результат расчета в переменную 'result'. Будь внимателен: если 'result' не будет определена, расчет провалится.\n"
+            "1. ОБЯЗАТЕЛЬНО сохрани финальный результат в переменную 'result'.\n"
             "2. Код должен быть простым и читаемым.\n"
-            "3. Используй только pandas/numpy операции, никаких import.\n"
-            "4. ВАЖНО: 'result' должен быть стандартным Python типом (int, float, dict, list), а НЕ numpy.int64. Используй .item() для скаляров.\n"
-            "4. Если нужна группировка по кейсам, используй колонку с ID кейса.\n"
-            "5. Результат должен быть JSON-сериализуемым (числа, строки, списки, dict).\n"
+            "3. Используй только pandas/numpy/matplotlib операции.\n"
+            "4. ВИЗУАЛИЗАЦИЯ: Если нужен график, сохрани его через `plt.savefig('reports/temp_plot.png')` и установи `result = 'reports/temp_plot.png'`.\n"
+            "5. 'result' должен быть стандартным Python типом (int, float, dict, list, str). Используй .item() для numpy скаляров.\n"
+            "6. Результат должен быть JSON-сериализуемым.\n"
+            "\n"
+            "ПРИМЕРЫ (Few-Shot):\n"
+            "Вопрос: Сколько всего уникальных кейсов?\n"
+            "Код: result = df['case_id'].nunique()\n\n"
+            "Вопрос: Найди топ-5 самых частых активностей.\n"
+            "Код: result = df['activity'].value_counts().head(5).to_dict()\n\n"
+            "Вопрос: Построй график распределения длительности кейсов.\n"
+            "Код:\n"
+            "durations = df.groupby('case_id')['timestamp'].agg(lambda x: (x.max() - x.min()).total_seconds() / 3600)\n"
+            "plt.figure(figsize=(10,6))\n"
+            "durations.hist(bins=20)\n"
+            "plt.title('Распределение длительности кейсов (часы)')\n"
+            "plt.savefig('reports/temp_plot.png')\n"
+            "result = 'reports/temp_plot.png'\n"
+            "\n"
+            "7. БЕЗОПАСНАЯ СОРТИРОВКА (LINUX FIX): Если нужно сортировать по колонке с датой, ВСЕГДА используй промежуточный pd.to_numeric(pd.to_datetime(..., errors='coerce')).\n"
+            "   Пример: df.assign(ts_int=pd.to_numeric(pd.to_datetime(df['timestamp'], errors='coerce'))).sort_values(['case_id', 'ts_int']).drop(columns='ts_int')\n"
+            "8. НЕ ПЕРЕКОНВЕРТИРУЙ: Даты уже в формате datetime64[ns]. Не вызывай pd.to_datetime() повторно.\n"
+            "9. ЯДЕРНЫЙ ПЕРЕВОД В ЧИСЛА (LINUX FIX): Если нужны инты из дат, ВСЕГДА делай pd.to_numeric(pd.to_datetime(df['ts'], errors='coerce')).fillna(0).astype('int64'). Это защищает от object-массивов с NaT.\n"
             + error_context
             + "\n"
             "ФОРМАТ ОТВЕТА (JSON):\n"
@@ -449,162 +265,119 @@ class LLMClient:
         )
 
         user_prompt = (
-            f"KNOWLEDGE BASE:\n{knowledge_base}\n\n"
-            f"MEMORY (ПРЕДЫДУЩИЙ КОНТЕКСТ):\n{memory}\n(Используй Memory, если вопрос ссылается на 'предыдущий' или 'такой же' фильтр!)\n\n"
-            f"FINAL REPORT:\n{final_report}\n\n"
             f"ИНФОРМАЦИЯ О ДАННЫХ:\n{df_info}\n\n"
             f"ВОПРОС:\n{question}"
             f"{error_context}"
         )
 
-        response_str = self.generate_response(
-            user_prompt, system_prompt, json_mode=True
-        )
-
+        response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
         parsed = self._parse_json(response_str)
         if parsed and "code" in parsed:
             return parsed
 
-        # Fallback 1: Extract code from markdown block if JSON failed
+        # Fallback 1: Extract "code" field directly via regex (handles malformed JSON with raw newlines)
+        import re
+        code_match = re.search(r'"code"\s*:\s*"((?:[^"\\]|\\.)*)"', response_str, re.DOTALL)
+        if code_match:
+            code = code_match.group(1).replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+            # Also try to extract thought
+            thought_match = re.search(r'"thought"\s*:\s*"((?:[^"\\]|\\.)*)"', response_str, re.DOTALL)
+            thought = thought_match.group(1) if thought_match else "Извлечено regex"
+            return {"thought": thought, "code": code}
+
+        # Fallback 2: Extract JSON from markdown code fence (```json ... ```)
+        for fence_lang in ["```json", "```"]:
+            if fence_lang in response_str:
+                try:
+                    json_block = response_str.split(fence_lang, 1)[1].split("```", 1)[0].strip()
+                    inner_parsed = self._parse_json(json_block)
+                    if inner_parsed and "code" in inner_parsed:
+                        return inner_parsed
+                except (IndexError, Exception):
+                    pass
+
+        # Fallback 3: Extract python code from markdown block
         if "```python" in response_str:
             try:
                 code_block = response_str.split("```python")[1].split("```")[0].strip()
-                return {"thought": "Извлечено из markdown блока python", "code": code_block}
-            except IndexError:
-                pass
-        elif "```" in response_str:
-            try:
-                code_block = response_str.split("```")[1].strip()
                 return {"thought": "Извлечено из markdown блока", "code": code_block}
             except IndexError:
                 pass
 
-        # Fallback 2: Check for direct assignment in response_str
+        # Fallback 4: Direct code assignment
         if "result =" in response_str:
-             return {"thought": "Извлечено прямым текстом", "code": response_str.strip()}
+            return {"thought": "Извлечено прямым текстом", "code": response_str.strip()}
 
-        # Last resort
-        return {"thought": "Не удалось распарсить JSON или код", "code": response_str}
+        return {"thought": "Не удалось распарсить", "code": response_str}
 
-    def verify_result(self, question: str, result_str: str) -> dict:
+    def verify_result(self, question: str, result_str: str, history: list = None) -> dict:
         """
-        Verifies if the result adequately answers the question.
-        Returns: {"is_valid": bool, "critique": str, "suggestion": str}
+        Verifies if the result adequately answers the question considering chat history.
         """
-        import json
-
         system_prompt = (
-            "Ты — строгий критик. Проверь, содержит ли результат ВСЕ необходимые данные для ответа.\n"
-            "НЕ пересчитывай цифры, проверяй ПОЛНОТУ данных.\n"
+            "Ты — строгий ИИ-Судья. Твоя задача — проверить, является ли результат выполнения кода КАЧЕСТВЕННЫМ ответом на вопрос.\n"
             "\n"
-            "КРИТИЧЕСКИЕ ОШИБКИ (is_valid: false):\n"
-            "- Пользователь спросил 'Топ 10', а в списке меньше 10 элементов. "
-            "(НО: Если спросили '10-й элемент' и вернули ТОЛЬКО ЕГО — это ВЕРНО! Не требуй всех 10, если нужен только один).\n"
-            "- Пользователь спросил конкретное число, а его нет в ответе инструмента.\n"
-            "- Результат пустой или содержит ошибку (например, 'Column does not exist').\n"
-            "- Ответ 'Я не знаю' или 'Данных нет' — это допустимо, если данных действительно нет, но если их можно получить — дай совет.\n"
-            "- Использован НЕВЕРНЫЙ инструмент (например, сортировка строк вместо частоты путей).\n"
-            "- ВЫЧИСЛЕНА НЕ ТА МЕТРИКА (например, посчитали частоту АКТИВНОСТЕЙ, а просили частоту ПУТЕЙ).\n"
-            "  * ПУТЬ (Trace) = последовательность активностей для одного кейса. Обычно выглядит как 'A -> B -> C'.\n"
-            "  * АКТИВНОСТЬ (Activity) = одно событие.\n"
+            "КРИТЕРИИ ПРОВЕРКИ:\n"
+            "1. ПОЛНОТА: Содержит ли результат все запрашиваемые данные?\n"
+            "2. РЕЛЕВАНТНОСТЬ: Соответствует ли ответ смыслу вопроса и контексту диалога?\n"
+            "3. ПРАВДОПОДОБНОСТЬ: Не выглядит ли результат заведомо ошибочным (например, пустой список там, где точно должны быть данные)?\n"
             "\n"
-            "ЧАСТИЧНЫЙ УСПЕХ (is_valid: 'partial'):\n"
-            "- Ответ В ЦЕЛОМ ВЕРНЫЙ, но есть мелкие недочеты формата (например, просили проценты, а дали только число).\n"
-            "- Ответ СОДЕРЖИТ нужную цифру, но с лишним 'мусором'.\n"
-            "- Инструмент вернул ТОЛЬКО 5 записей вместо 10 (как просили), но это лучше чем ничего.\n"
-            "В таких случаях возвращай 'partial', чтобы мы показали пользователю то, что есть.\n"
+            "СПЕЦИАЛЬНЫЕ ПРАВИЛА:\n"
+            "- Если результат — путь к файлу (например, 'reports/temp_plot.png'), считай это валидным графиком.\n"
+            "- Если пользователь спросил 'Топ 10', а в результате 0 или 1 элемент без объяснения причин — это is_valid: false.\n"
             "\n"
             "ФОРМАТ ОТВЕТА (JSON):\n"
             "{\n"
-            '  "thought": "Ответ верный, но формат не совсем тот...",\n'
-            '  "is_valid": true | false | "partial",\n'
-            '  "critique": "...",\n'
-            '  "suggestion": "..."\n'
-            "}"
-            "Если данных достаточно и логика верна, верни is_valid: true."
+            '  "is_valid": true | false,\n'
+            '  "critique": "Краткое описание проблемы, если есть",\n'
+            '  "suggestion": "Как исправить код, чтобы получить верный результат"\n'
+            "}\n"
         )
 
-        user_prompt = f"ВОПРОС: {question}\n\nРЕЗУЛЬТАТ: {result_str}"
-
-        response_str = self.generate_response(
-            user_prompt, system_prompt, json_mode=True
-        )
+        prompt_parts = []
+        if history:
+            prompt_parts.append("ИСТОРИЯ ДИАЛОГА:")
+            for msg in history[-5:]:
+                role = "Пользователь" if msg["role"] == "user" else "Ассистент"
+                prompt_parts.append(f"{role}: {msg['text']}")
+        
+        prompt_parts.append(f"\nВОПРОС: {question}\n\nРЕЗУЛЬТАТ КОДА:\n{result_str}")
+        user_prompt = "\n".join(prompt_parts)
+        response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
         parsed = self._parse_json(response_str)
         if parsed:
             return parsed
 
         return {
             "is_valid": False,
-            "thought": f"Ошибка парсинга ответа проверки (JSON error). Raw: {response_str[:100]}",
             "critique": "Не удалось проверить результат (сбой JSON).",
             "suggestion": "Попробуй выполнить код еще раз.",
         }
 
-    def interpret_code_result(
-        self, question: str, result: str, result_type: str
-    ) -> dict:
+    def interpret_code_result(self, question: str, result: str, result_type: str) -> dict:
         """
         Interprets code execution result into a human-friendly answer.
+        Returns: {"answer": str}
         """
-        import json
-
         system_prompt = (
             "Ты — Эксперт-консультант по Process Mining.\n"
-            "Пользователь задал вопрос, и был выполнен pandas-код.\n"
-            "Твоя задача — превратить результат в понятный ответ.\n"
-            "ПРАВИЛА:\n"
-            "- Отвечай кратко, на русском языке.\n"
-            "- Используй цифры/факты из результата.\n"
-            "- Если результат — это ДЛИННЫЙ ПУТЬ (строка A -> B -> ...), покажи его ПЕЛИКОМ (или начло...конец), но НЕ сокращай до одного слова!\n"
-            "- Не выдумывай названия процессов, цитируй прямо из данных.\n"
-            "\n"
-            "ФОРМАТ (JSON):\n"
-            '{"answer": "Ответ..."}'
+            "Преврати результат выполнения кода в понятный ответ на русском языке.\n"
+            "НИКОГДА НЕ ВЫДУМЫВАЙ ЦИФРЫ. Используй ТОЛЬКО факты из результата.\n"
+            "Формат ответа: JSON {\"answer\": \"...\"}"
         )
 
-        user_prompt = f"ВОПРОС:\n{question}\n\nРЕЗУЛЬТАТ ({result_type}):\n{result}"
-
-        response_str = self.generate_response(
-            user_prompt, system_prompt, json_mode=True
+        user_prompt = (
+            f"ВОПРОС ПОЛЬЗОВАТЕЛЯ:\n{question}\n\n"
+            f"РЕЗУЛЬТАТ КОДА (тип: {result_type}):\n{result}"
         )
+
+        if str(result).endswith('.png'):
+            user_prompt += "\n\nПРИМЕЧАНИЕ: Результат — это путь к созданному графику. Обязательно упомяни, что график построен и доступен по ссылке."
+
+        response_str = self.generate_response(user_prompt, system_prompt, json_mode=True)
         parsed = self._parse_json(response_str)
         if parsed:
             return parsed
 
-        return {"answer": result}
+        return {"answer": str(result)}
 
-    def decide_next_step(self, memory: str, tools_description: str) -> dict:
-        """
-        Analyzes the current memory and decides the next step (tool to use).
-        Returns a JSON with 'thought' and 'tool_name'.
-        """
-        system_prompt = (
-            "Ты — умный оркестратор агента Process Mining (AutoPM). Твоя цель — провести полный анализ процесса от загрузки до финального отчета.\n"
-            "У тебя есть набор инструментов (агентов). Твоя задача — рассуждать и выбирать следующий шаг, основываясь на ДОЛГОСРОЧНОЙ ПАМЯТИ.\n\n"
-            "ПРАВИЛА:\n"
-            "1. Анализируй 'Memory' (текущее состояние). Если шаг отмечен как DONE/Success, НЕ ПОВТОРЯЙ его, переходи к следующему логическому шагу.\n"
-            "2. ЛОГИЧЕСКАЯ ЦЕПОЧКА ПО УМОЛЧАНИЮ: "
-            "Data Profiling -> Data Cleaning -> Process Discovery -> Visualization -> Process Analysis -> Reporting -> Finish.\n"
-            "   - Visualization и Process Discovery независимы, их порядок можно менять, но обычно Visualization идет раньше.\n"
-            "   - Reporting ВСЕГДА последний перед Finish.\n"
-            "3. Если в Памяти есть активная проблема или ОШИБКА последнего шага, выбери инструмент для её исправления (или повтори шаг).\n"
-            "4. ОТВЕТ ДОЛЖЕН БЫТЬ В ФОРМАТЕ JSON:\n"
-            "   {\n"
-            '     "thought": "Твое рассуждение. Что мы уже сделали (согласно Memory)? Что нужно сделать дальше?",\n'
-            '     "tool_name": "Название инструмента из списка Available Tools (или \'Finish\', если все готово)"\n'
-            "   }\n"
-        )
-
-        prompt = f"Long-Term Memory:\n{memory}\n\nAvailable Tools:\n{tools_description}\n\nКакой следующий шаг?"
-
-        response = self.generate_response(prompt, system_prompt)
-
-        parsed = self._parse_json(response)
-        if parsed:
-            return parsed
-
-        # Fallback for bad LLM output
-        return {
-            "thought": f"Failed to parse JSON. Raw response: {response[:100]}",
-            "tool_name": "Reporting",
-        }

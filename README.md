@@ -1,28 +1,68 @@
-# AutoPM - Autonomous Process Mining Agent
+# AutoPM — Интеллектуальный агент для Process Mining
 
-AutoPM — это **агентная система** для автоматического анализа бизнес-процессов. В отличие от жестких скриптов, AutoPM ведет диалог, запоминает контекст, пишет и исполняет Python-код для сложных запросов и самостоятельно проверяет качество своих ответов.
+AutoPM — это мультиагентная система для загрузки, анализа и интерактивного исследования данных бизнес-процессов (Event Logs). Агент умеет автоматически находить отклонения, отвечать на вопросы по документации платформы (RAG), а также генерировать и безопасно выполнять Python-код для глубокой аналитики и визуализации.
 
-## 🚀 Ключевые Возможности (Feature Set)
+## 🛠 Архитектура
 
-### 🧠 Когнитивное Ядро (Agentic Core)
-*   **Proactive Router**: Агент сам решает, какой инструмент использовать. Для простых вопросов (частота операций) он берет готовые функции, а для сложных (медиана, фильтрация по условию) — **сразу пишет Python-код**.
-*   **Long-Term Memory**: Агент "помнит" весь контекст диалога. Вы можете спросить *"А почему здесь цифра такая?"*, и он поймет, что речь идет о таблице из прошлого ответа.
-*   **Robust Verification**: Встроенный "Судья" проверяет ответы. Если ответ верен по сути, но не идеален по форме, агент покажет его с пометкой "Partial Success", вместо бесконечных переделок.
+```mermaid
+graph TD
+    subgraph "Этап 1: Загрузка и подготовка"
+        File["Файл CSV / Excel / XES"] --> Load["Загрузка данных"]
+        Load --> ColMap["Маппинг колонок"]
+        ColMap --> DevDet["DeviationDetectorAgent"]
+        DevDet --> Fmt["DataFormatterAgent"]
+        Fmt --> Save["Сохранение сессии"]
+    end
 
-### 🐍 Code Interpreter & Sandbox
-*   **Dynamic Code Generation**: Для ответов на вопросы, которых нет в стандартных меню, агент пишет Pandas-код на лету.
-*   **Safe Executor**: Исполнение кода изолировано (запрещен доступ к файловой системе вне проекта, сети и системным вызовам).
-*   **Smart Fallback**: Если стандартный инструмент не справился, агент автоматически переключается на написание кода.
+    subgraph "Этап 2: Интерактивный чат"
+        User["Вопрос пользователя"] --> Router{"Smart Router"}
+        Router -->|"Инструкция/Платформа"| RAG["RAG Tool (FAISS)"]
+        Router -->|"Простой вопрос"| DirectAnswer["Прямой ответ"]
+        Router -->|"Нужен расчет/график"| CodeGen["Code Interpreter"]
 
-### 📊 Классический Пайплайн (при старте)
-Перед началом диалога система проводит полный цикл анализа:
-1.  **Профилирование** (Data Profiling).
-2.  **Очистка** (Data Cleaning + Auto-Outlier Removal).
-3.  **Process Discovery** (Построение карты процесса через PM4Py).
-4.  **Анализ Аномалий** (Поиск узких мест и редких путей).
-5.  **Генерация Отчета** (Markdown + Графики).
+        RAG --> RAGResult["Поиск в базе знаний"]
+        RAGResult --> Answer
 
----
+        CodeGen --> ASTCheck{"AST Validation"}
+        ASTCheck -->|"Ошибка"| Retry
+        ASTCheck -->|"OK"| Confirm["Подтверждение"]
+        Confirm --> Sandbox["Sandbox Execution"]
+
+        Sandbox -->|"Ошибка"| Retry["Retry Loop (Memory)"]
+        Sandbox -->|"Результат/График"| Judge{"Judge - Верификатор"}
+
+        Judge -->|"is_valid: false"| Retry
+        Judge -->|"is_valid: true"| Interpret["Интерпретация"]
+        Interpret --> Answer["Ответ пользователю"]
+        DirectAnswer --> Answer
+        Retry --> CodeGen
+    end
+```
+
+### Как это работает
+
+1.  **Загрузка и Анализ** — загружает данные, находит 18 типов отклонений и автоматически приводит типы колонок.
+2.  **Smart Router** — анализирует вопрос и выбирает инструмент: прямое общение, поиск в документации (RAG) или написание кода.
+3.  **RAG (Local Knowledge Base)** — при вопросах о платформе ищет инструкции в локальных `.md` файлах через FAISS и модель `multilingual-e5-large`.
+4.  **Code Interpreter** — пишет pandas-код для расчетов или `matplotlib` для графиков. Выполняется в защищенной песочнице.
+5.  **Judge & Memory** — Судья проверяет адекватность ответа в контексте диалога, а глобальная память ошибок помогает ассистенту не повторять прошлые промахи.
+
+## 🚀 Возможности
+
+*   **RAG (Knowledge Base)**: Поиск по руководствам платформы (локально, через FAISS).
+*   **Визуализация**: Построение графиков прямо в чате (Matplotlib).
+*   **Data Profiling**: Ассистент видит `head()`, `describe()` и частые значения для точного написания кода.
+*   **Продвинутый Судья**: Проверка логики ответа с учетом истории чата.
+*   **Linux & GPU Optimized**: Полная совместимость с `cudf.pandas` и стабильная работа в Linux-средах.
+*   **Deviation Detection**: Авто-поиск 18 типов процессных отклонений (циклы, узкие места и т.д.).
+*   **Безопасность**: Sandbox с AST-валидацией.
+
+## 🐧 Совместимость с Linux и GPU (RAPIDS)
+
+AutoPM оптимизирован для работы в высокопроизводительных средах:
+- **Zero-Crash Data Layer**: Изоляция данных от `cudf.pandas` прокси-объектов.
+- **Pure Pandas Mode**: В критических узлах анализа данные принудительно переводятся в чистый Pandas (CPU) для 100% стабильности.
+- **Native Datetime Handling**: Конвертация в нативные объекты Python (`pydatetime`) перед вызовом инструментов анализа.
 
 ## 🚦 Быстрый старт
 
@@ -33,69 +73,68 @@ cd AutoPM
 pip install -r requirements.txt
 ```
 
-### 2. Конфигурация
-Скопируйте пример конфигурации и настройте его:
+### 2. Подготовка RAG (Оффлайн-режим)
+Если вы запускаете систему без интернета, убедитесь, что модель скачана:
 ```bash
-cp config.example.yaml config.yaml
+python download_model.py # Один раз для загрузки в models/
 ```
 
-Отредактируйте `config.yaml`:
+### 3. Конфигурация (`config.yaml`)
 ```yaml
-# Провайдер: "mistral" (облако) или "local" (локальная модель)
-provider: "mistral"
-
-# Настройки Mistral Cloud
+provider: "mistral" # "mistral" или "local"
 mistral:
-  api_key: "ВАШ_API_КЛЮЧ"
-  model: "mistral-small-latest"
-
-# Настройки локальной модели (Ollama, LM Studio, vLLM)
-local:
-  base_url: "http://localhost:11434/v1"
-  model: "llama3.2"
-  api_key: "ollama"
+  api_key: "YOUR_KEY"
+rag:
+  docs_dir: "PM_Platform_docs"
+  embedding_model_path: "models/multilingual-e5-large"
 ```
 
-> **💡 Локальные модели**: Установите `provider: "local"` и укажите адрес вашего сервера (Ollama, LM Studio и др.).
+### 4. Заполнение базы знаний
+Поместите ваши инструкции (`.md`) в папку `PM_Platform_docs/`.
 
-### 3. Запуск
+### 5. Запуск
 ```bash
-python pm_agent/main.py --file "data/logs.csv"
+# Стандартный запуск
+python pm_agent/main.py --file "log.csv"
+
+# Запуск с GPU-ускорением (Linux/WSL)
+python -m cudf.pandas pm_agent/main.py --file "log.csv"
 ```
-После завершения начального анализа, **система перейдет в режим чата**. Вы можете спрашивать:
-*   *"Покажи 25-й по популярности путь"*
-*   *"Какая средняя длительность кейсов, начинающихся с 'Start'?"*
-*   *"Найди аномалии в отделе продаж"*
 
 ---
 
-## 🛠 Архитектура
+## 🔒 Безопасность: Safe Executor
 
-```mermaid
-graph TD
-    User["User Question"] --> Router{"Smart Router"}
-    Router -->|Simple Query| Tools["Standard Tools (Pandas Wrappers)"]
-    Router -->|Complex Logic| CodeGen["Code Interpreter"]
-    
-    Tools --> Validator{"Judge"}
-    CodeGen --> Validator
-    
-    Validator -->|Success| Answer["Final Answer"]
-    Validator -->|Partial| AnswerWarning["Answer + Warning"]
-    Validator -->|Fail| Retry["Retry Loop"]
-    
-    Hash[("Memory")] -.-> CodeGen
-    Knowledge[("Knowledge Base")] -.-> CodeGen
+| Слой | Описание |
+|---|---|
+| **AST Validation** | Блокировка потенциально опасного синтаксиса |
+| **Sandbox** | Ограниченные `builtins` (нет `open`, `exec`, `eval`, `import`) |
+| **White-list** | Доступны только `df`, `pd`, `np`, `plt` |
+| **Linux Fix** | Специальные правила для безопасной сортировки дат на Linux |
+| **Timeout** | Защита от бесконечных циклов |
+
+---
+
+## 📁 Структура проекта
+
+```
+AutoPM/
+├── pm_agent/
+│   ├── main.py              # Точка входа и чат-петля
+│   ├── llm.py               # Оркестрация: Router, CodeGen, Judge
+│   ├── rag_manager.py       # RAG: Поиск через FAISS и E5
+│   ├── safe_executor.py     # Песочница для Python-кода
+│   └── agents/              # Специализированные агенты (PM-логика)
+├── PM_Platform_docs/        # Ваша документация для RAG (.md файлов)
+├── models/                  # Локальные модели (e5-large)
+├── config.yaml              # Настройки ключей и путей
+└── reports/                 # История сессий, кеш данных и графики
 ```
 
-### Компоненты
-*   `main.py`: Оркестратор и цикл чата (ReAct Loop).
-*   `llm.py`: Мозг агента (LLM Client, Prompts, Verification).
-*   `chat_tools.py`: Библиотека из 15+ pandas-функций.
-*   `safe_executor.py`: Песочница для исполнения сгенерированного кода.
-*   `agents/`: Специализированные агенты начального пайплайна (Discovery, Analysis и др.).
+## 🧰 Стек технологий
 
-## 👨‍💻 Контрибьюторам
-При разработке новых фич учитывайте:
-*   **Context Awareness**: Любой новый инструмент должен уметь принимать `context` (память).
-*   **Safety**: Пандас-код должен исполняться только через `SafeExecutor`.
+*   **LLM**: Mistral API / Local Llama (via OpenAI compatible API)
+*   **Embeddings**: multilingual-e5-large (Local)
+*   **Vector DB**: FAISS
+*   **Analysis**: PM4Py, Pandas, SciPy, NumPy
+*   **Viz**: Matplotlib

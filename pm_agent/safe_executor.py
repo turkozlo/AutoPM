@@ -11,6 +11,10 @@ from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+
+# Set non-interactive backend for server-side plotting
+plt.switch_backend('Agg')
 
 
 class TimeoutError(Exception):
@@ -88,6 +92,7 @@ def execute_pandas_code(
         "df": safe_df,
         "pd": pd,
         "np": np,
+        "plt": plt,
         "__builtins__": restricted_builtins,
     }
 
@@ -166,22 +171,27 @@ def format_result(result: Any) -> str:
 
 
 def get_df_info_for_llm(df: pd.DataFrame) -> str:
-    """Generates a concise DataFrame description for LLM context."""
+    """Generates a detailed DataFrame description for LLM context (Profiling)."""
     info_lines = [
         f"DataFrame: {len(df)} строк, {len(df.columns)} колонок",
-        f"Колонки: {', '.join(df.columns[:15])}"
-        + ("..." if len(df.columns) > 15 else ""),
-        "Типы данных:",
+        f"Первые 3 строки (head):\n{df.head(3).to_string()}\n",
+        "Статистика (describe):\n" + (df.describe().to_string() if not df.empty else "N/A") + "\n",
+        "Типы данных и примеры значений:",
     ]
 
-    for col in df.columns[:10]:
+    for col in df.columns[:15]:
         dtype = str(df[col].dtype)
-        sample = str(df[col].dropna().iloc[0]) if len(df[col].dropna()) > 0 else "N/A"
-        if len(sample) > 30:
-            sample = sample[:27] + "..."
-        info_lines.append(f"  - {col}: {dtype} (пример: {sample})")
+        
+        # Get unique values / frequency for core columns
+        if dtype in ['object', 'category']:
+            vc = df[col].value_counts().head(5)
+            counts_str = ", ".join([f"'{k}': {v}" for k, v in vc.items()])
+            info_lines.append(f"  - {col}: {dtype} (Частые: {counts_str})")
+        else:
+            sample = str(df[col].dropna().iloc[0]) if len(df[col].dropna()) > 0 else "N/A"
+            info_lines.append(f"  - {col}: {dtype} (пример: {sample})")
 
-    if len(df.columns) > 10:
-        info_lines.append(f"  ... и еще {len(df.columns) - 10} колонок")
+    if len(df.columns) > 15:
+        info_lines.append(f"  ... и еще {len(df.columns) - 15} колонок")
 
     return "\n".join(info_lines)
